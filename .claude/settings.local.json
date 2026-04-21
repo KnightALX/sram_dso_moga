@@ -9,7 +9,8 @@
       "Bash(python -m pytest tests/ -v)",
       "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 20 --output-dir results/baseline_run)",
       "Bash(gh auth:*)",
-      "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 20 --output-dir results/test_run)"
+      "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 20 --output-dir results/test_run)",
+      "Bash(python -c \"from src.dashboard import create_dashboard; print\\('Dashboard import OK'\\)\")"
     ]
   }
 }

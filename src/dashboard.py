@@ -253,16 +253,15 @@ class Dashboard:
 
     def _create_3d_tab(self) -> html.Div:
         """Create 3D Pareto visualization tab."""
-        fig = go.Figure3d()
         obj = self.pareto_df[['Area', 'Power', 'Delay']].values
 
-        fig.add_trace(go.Scatter3d(
+        fig = go.Figure(data=[go.Scatter3d(
             x=obj[:, 0], y=obj[:, 1], z=obj[:, 2],
             mode='markers',
             marker=dict(size=6, color=obj[:, 2], colorscale='Viridis'),
             text=[f'Sol {i}' for i in range(len(obj))],
             hoverinfo='text',
-        ))
+        )])
 
         fig.update_layout(
             title='3D Pareto Front',
