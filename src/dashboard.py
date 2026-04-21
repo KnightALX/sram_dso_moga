@@ -16,8 +16,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import (
-    ALL, Dash, State, dcc, html, callback_context,
-    Input, Output, register_callback
+    ALL, Dash, State, dcc, html,
+    Input, Output, callback_context as cb_context
 )
 
 
@@ -435,7 +435,7 @@ class Dashboard:
             [State('store-results', 'data')]
         )
         def update_filters(n_clicks, area_range, power_range, delay_range, data):
-            ctx = callback_context
+            ctx = cb_context
             if not ctx.triggered:
                 return data
 

@@ -8,7 +8,8 @@
       "Bash(python tests/validate.py)",
       "Bash(python -m pytest tests/ -v)",
       "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 20 --output-dir results/baseline_run)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 20 --output-dir results/test_run)"
     ]
   }
 }
