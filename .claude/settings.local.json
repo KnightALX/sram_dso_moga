@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(python tests/validate.py)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 20 --output-dir results/baseline_run)",
+      "Bash(gh auth:*)"
+    ]
+  }
+}

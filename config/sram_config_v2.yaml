@@ -1,0 +1,133 @@
+# SRAM DSO-MOGA Configuration Schema
+# Enhanced configuration for Multi-Objective Genetic Algorithm optimization
+
+top_name: sense_amp_top
+spf_path: /path/to/your/sense_amp.spf
+
+# ========== Algorithm Settings ==========
+algorithm:
+  name: NSGA-III          # NSGA-II or NSGA-III
+  pop_size: 80
+  n_gen: 60
+  seed: 42
+
+  # Crossover settings
+  crossover:
+    type: SBX             # SBX (Simulated Binary) or uniform
+    prob: 0.9
+    eta: 15               # SBX distribution index
+
+  # Mutation settings
+  mutation:
+    type: polynomial      # polynomial (integer-adapted) or uniform
+    prob: 0.15
+    eta: 20               # Polynomial mutation distribution index
+
+  # Selection settings
+  selection:
+    type: tournament      # tournament or random
+    tournament_size: 2
+
+# ========== Sampling Settings ==========
+sampling:
+  method: lhs             # lhs (Latin Hypercube), boundary, random
+  combo_count: 200         # Target sample count
+  max_combo: 10000         # Above this, use sampling instead of full grid
+
+# ========== Objectives ==========
+objectives:
+  - name: area
+    label: "Area (um²)"
+    direction: minimize
+    weight: 1.0
+    enabled: true
+  - name: power
+    label: "Power (uW)"
+    direction: minimize
+    weight: 1.0
+    enabled: true
+  - name: delay
+    label: "Delay (ps)"
+    direction: minimize
+    weight: 1.0
+    enabled: true
+
+# ========== Constraints ==========
+constraints:
+  - name: max_power
+    expr: "power <= 500"
+    penalty: 1000.0
+    enabled: false
+  - name: min_speed
+    expr: "delay <= 200"
+    penalty: 1000.0
+    enabled: false
+
+# ========== Device Groups ==========
+active_bundles:
+  - readpath
+  - writepath
+
+groups:
+  - bundle_flag: readpath
+    combo_count: 120
+    devices:
+      - name: precharge_pmos
+        vt_options: ["vt0", "vt1", "vt2"]
+        gl_options: [0.020, 0.025, 0.030]
+        nfin_options: [2, 3, 4, 5, 6]
+      - name: sense_nmos
+        vt_options: ["vt0", "vt1"]
+        gl_options: [0.018, 0.022, 0.026]
+        nfin_options: [1, 2, 3, 4]
+      - name: sense_pmos
+        vt_options: ["vt0", "vt1"]
+        gl_options: [0.020, 0.024]
+        nfin_options: [3, 4, 5]
+
+  - bundle_flag: writepath
+    combo_count: 80
+    devices:
+      - name: write_driver_nmos
+        vt_options: ["vt0", "vt1"]
+        gl_options: [0.020, 0.025]
+        nfin_options: [4, 5, 6, 8]
+      - name: write_driver_pmos
+        vt_options: ["vt0"]
+        gl_options: [0.022, 0.028]
+        nfin_options: [2, 3, 4]
+
+# ========== PPA Model Parameters ==========
+ppa_model:
+  area:
+    nfin_coef: 0.15        # Area ∝ nfin_sum * coef
+    gl_coef: 120.0        # Area ∝ gl_mean * coef
+    base: 0.8
+  power:
+    nfin_coef: 12.5        # Power ∝ nfin_sum * coef
+    vt_penalty:
+      vt0: 1.0
+      vt1: 0.8
+      vt2: 1.2
+    base: 5.0
+  delay:
+    nfin_coef: 0.9         # Delay ∝ 180/(nfin_sum * coef)
+    gl_coef: 800.0        # Delay ∝ gl_mean * coef
+
+# ========== Output Settings ==========
+output:
+  dir: ./results
+  formats:
+    - html               # Dashboard
+    - csv                # Pareto solutions
+    - json               # Full results
+  dashboard:
+    tabs:
+      - 3d_pareto
+      - 2d_projections
+      - convergence
+      - parallel_coords
+      - param_distribution
+      - correlation
+      - pareto_table
+      - sensitivity

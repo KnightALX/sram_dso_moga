@@ -1,0 +1,35 @@
+top_name: sense_amp_top                  # 全局：Top名称（用于日志/报告）
+spf_path: /path/to/your/sense_amp.spf   # 全局：SPF网表路径（真实集成时使用）
+max_combo: 10000                         # 全局：超过此值强制全遍历
+active_bundles:                          # 运行时激活的bundle/flag列表
+  - readpath
+  - writepath
+
+groups:
+  - bundle_flag: readpath                # group1
+    combo_count: 120                     # 本group期望采样数（实际会与所有group联合抽样）
+    devices:
+      - name: precharge_pmos
+        vt_options: ["vt0", "vt1", "vt2"]
+        gl_options: [0.020, 0.025, 0.030]   # um
+        nfin_options: [2, 3, 4, 5, 6]
+      - name: sense_nmos
+        vt_options: ["vt0", "vt1"]
+        gl_options: [0.018, 0.022, 0.026]
+        nfin_options: [1, 2, 3, 4]
+      - name: sense_pmos
+        vt_options: ["vt0", "vt1"]
+        gl_options: [0.020, 0.024]
+        nfin_options: [3, 4, 5]
+
+  - bundle_flag: writepath               # group2
+    combo_count: 80
+    devices:
+      - name: write_driver_nmos
+        vt_options: ["vt0", "vt1"]
+        gl_options: [0.020, 0.025]
+        nfin_options: [4, 5, 6, 8]
+      - name: write_driver_pmos
+        vt_options: ["vt0"]
+        gl_options: [0.022, 0.028]
+        nfin_options: [2, 3, 4]
