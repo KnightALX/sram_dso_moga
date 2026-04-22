@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 
 import numpy as np
 
@@ -34,6 +34,7 @@ class AlgorithmConfig:
     tournament_size: int = 2
     use_nsga3: bool = False
     n_partitions: int = 12  # For NSGA-III reference points
+    checkpoint_fn: Optional[callable] = None  # Called after each gen: fn(gen, population)
 
 
 @dataclass
@@ -328,6 +329,10 @@ class NSGA:
         self.evaluator = evaluator
         self.logger = logger or logging.getLogger(__name__)
 
+        # Set random seed for reproducibility
+        np.random.seed(self.config.seed)
+        random.seed(self.config.seed)
+
         self.population: List[Individual] = []
         self.history: List[dict] = []
         self.best_front: List[Individual] = []
@@ -392,6 +397,10 @@ class NSGA:
 
             if gen % 10 == 0 or gen == self.config.n_gen - 1:
                 self.logger.info(f"Gen {gen:3d} | Front0 size: {front0_size}")
+
+            # Checkpoint callback (e.g., save population to disk)
+            if self.config.checkpoint_fn is not None:
+                self.config.checkpoint_fn(gen, self.population)
 
         return self.get_pareto_front()
 

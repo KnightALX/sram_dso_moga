@@ -22,11 +22,13 @@ def export_json(results: Dict[str, Any], output_path: Path) -> None:
         output_path: Output file path
     """
     def make_serializable(obj):
-        """Convert numpy types to native Python types."""
+        """Convert numpy and other non-standard types to native Python types."""
         if isinstance(obj, dict):
             return {k: make_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [make_serializable(i) for i in obj]
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
         elif hasattr(obj, 'item'):  # numpy scalar
             return obj.item()
         return obj

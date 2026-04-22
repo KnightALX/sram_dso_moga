@@ -25,6 +25,9 @@ moga.log
 # Dash
 assets/
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Testing
 .pytest_cache/
 .coverage

@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
 """
-SRAM DSO-MOGA: Main optimization script.
+SRAM DSO-MOGA: Multi-Stage Optimization with Two-Phase Simulation
 
-Execution Flow (4 Steps):
-    Step 1: Parse YAML → Calculate combinations (LHS or full grid)
-    Step 2: SPF Hack + Simulation submission (USER-IMPLEMENTED)
-    Step 3: Poll PPA results from simulation batch
-    Step 4: NSGA optimization
+Workflow:
+    Stage 1 (Coarse Search):
+        Step 1: Generate full design space combinations (LHS or full grid)
+        Step 2: SPF hack → Batch simulation submission
+        Step 3: Collect all PPA results
+        Step 4: NSGA coarse search → Pareto front
+
+    Stage 2 (Fine Search):
+        Step 1': Generate fine samples around Stage 1 Pareto front
+        Step 2': SPF hack → Fine batch simulation
+        Step 3': Collect fine PPA results
+        Step 4': NSGA fine search → Final Pareto front
 
 Usage:
-    # Run all steps sequentially (default)
-    python run_moga.py --config config/sram_config_v2.yaml
+    # Stage 1: Coarse search
+    python run_moga.py --config config.yaml --stage 1 --pop-size 100 --n-gen 50
 
-    # Run individual steps (for long-running simulations)
-    python run_moga.py --config config.yaml --step 1      # Generate combinations only
-    python run_moga.py --config config.yaml --step 2      # Generate SPFs for submission
-    python run_moga.py --config config.yaml --step 3      # Poll and collect results
-    python run_moga.py --config config.yaml --step 4      # Run optimization
+    # Stage 2: Fine search (uses Stage 1 results)
+    python run_moga.py --config config.yaml --stage 2 --pop-size 50 --n-gen 30
 
-    # Resume from a specific step
-    python run_moga.py --config config.yaml --resume-from 3
-
-    # With results polling for external simulations
-    python run_moga.py --config config.yaml --step 3 --poll-interval 60 --poll-timeout 7200
-
-For Step 2/3 (SPF simulation), see:
-    - src/spf_handler.py: SPF manipulation interface
-    - src/fitness_collector.py: PPA result collection
+    # Run both stages sequentially
+    python run_moga.py --config config.yaml --stage 1 --stage 2
 """
 
 from __future__ import annotations
@@ -34,70 +31,149 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
+from typing import Dict, List, Optional, Set
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from config import Config, load_config
-from evaluator import create_evaluator, PPAEvaluator
-from nsga import NSGA, AlgorithmConfig, Individual
-from fitness_collector import FitnessCollector, CombinationGenerator
+from evaluator import create_evaluator
+from nsga import NSGA, AlgorithmConfig
+from fitness_collector import CombinationGenerator
 from exporter import export_all
 
 
 # =====================================================================
-# Checkpoint Management
+# Stage Manager
 # =====================================================================
 
-class CheckpointManager:
-    """Manages checkpoints for resumable execution."""
+class StageManager:
+    """Manages multi-stage optimization workflow."""
 
-    def __init__(self, output_dir: Path):
-        self.output_dir = output_dir
-        self.checkpoint_dir = output_dir / 'checkpoints'
+    STAGE_DIRS = {
+        1: 'stage1',
+        2: 'stage2',
+    }
+
+    def __init__(self, base_output_dir: Path):
+        self.base_dir = base_output_dir
+        self.checkpoint_dir = base_output_dir / 'checkpoints'
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    def save(self, step: int, data: dict) -> None:
-        """Save checkpoint for a step."""
-        path = self.checkpoint_dir / f'step_{step}.json'
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        logging.getLogger('sram_dso_moga').info(f"Checkpoint saved: {path}")
+    def get_stage_dir(self, stage: int) -> Path:
+        """Get output directory for a stage."""
+        d = self.base_dir / self.STAGE_DIRS[stage]
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
-    def load(self, step: int) -> dict:
-        """Load checkpoint for a step."""
-        path = self.checkpoint_dir / f'step_{step}.json'
+    def get_stage_checkpoint(self, stage: int, key: str):
+        """Load checkpoint data for a stage."""
+        path = self.checkpoint_dir / f'stage{stage}_{key}.json'
         if path.exists():
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return None
 
-    def exists(self, step: int) -> bool:
-        """Check if checkpoint exists."""
-        return (self.checkpoint_dir / f'step_{step}.json').exists()
+    def save_stage_checkpoint(self, stage: int, key: str, data: dict):
+        """Save checkpoint data for a stage."""
+        path = self.checkpoint_dir / f'stage{stage}_{key}.json'
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, default=str)
 
-    def clear(self, step: int = None) -> None:
-        """Clear checkpoint(s)."""
-        if step is None:
-            for p in self.checkpoint_dir.glob('step_*.json'):
-                p.unlink()
-        else:
-            (self.checkpoint_dir / f'step_{step}.json').unlink(missing_ok=True)
+    def stage_exists(self, stage: int, key: str) -> bool:
+        """Check if stage checkpoint exists."""
+        return (self.checkpoint_dir / f'stage{stage}_{key}.json').exists()
+
+    def save_population_checkpoint(self, stage: int, gen: int,
+                                   population: List["Individual"]) -> None:
+        """
+        Save population state at a specific generation for crash recovery.
+
+        Args:
+            stage: Stage number (1 or 2)
+            gen: Generation number
+            population: List of Individual objects
+        """
+        path = self.checkpoint_dir / f'stage{stage}_pop_gen{gen}.json'
+        data = {
+            'gen': gen,
+            'stage': stage,
+            'individuals': [
+                {
+                    'genes': ind.genes.tolist(),
+                    'objectives': [float(x) for x in ind.objectives],
+                    'rank': int(ind.rank),
+                    'crowding_distance': float(ind.crowding_distance),
+                }
+                for ind in population
+            ]
+        }
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+
+    def load_population_checkpoint(self, stage: int, gen: int):
+        """
+        Load population checkpoint from a specific generation.
+
+        Args:
+            stage: Stage number (1 or 2)
+            gen: Generation number
+
+        Returns:
+            Tuple of (gen, population) or None if checkpoint not found
+        """
+        path = self.checkpoint_dir / f'stage{stage}_pop_gen{gen}.json'
+        if not path.exists():
+            return None
+
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        from nsga import Individual
+        population = [
+            Individual(
+                genes=np.array(ind_data['genes']),
+                objectives=np.array(ind_data['objectives']),
+                rank=ind_data['rank'],
+                crowding_distance=ind_data['crowding_distance'],
+            )
+            for ind_data in data['individuals']
+        ]
+        return data['gen'], population
+
+    def get_latest_population_gen(self, stage: int) -> Optional[int]:
+        """Find the latest saved generation for a stage."""
+        checkpoint_files = list(self.checkpoint_dir.glob(f'stage{stage}_pop_gen*.json'))
+        if not checkpoint_files:
+            return None
+
+        gens = []
+        for f in checkpoint_files:
+            try:
+                name = f.stem  # stage1_pop_gen50
+                gen = int(name.split('_gen')[1])
+                gens.append(gen)
+            except (ValueError, IndexError):
+                continue
+
+        return max(gens) if gens else None
+
+    def get_combined_results(self) -> Dict[int, dict]:
+        """Load results from all completed stages."""
+        combined = {}
+        for stage in [1, 2]:
+            if self.stage_exists(stage, 'ppa_results'):
+                combined[stage] = self.get_stage_checkpoint(stage, 'ppa_results')
+        return combined
 
 
 def setup_logging(log_file: Path = None, level: int = logging.INFO) -> logging.Logger:
-    """Configure logging with file and console handlers."""
+    """Configure logging."""
     logger = logging.getLogger('sram_dso_moga')
     logger.setLevel(level)
-
-    formatter = logging.Formatter(
-        '%(asctime)s | %(levelname)-8s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    formatter = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
     console = logging.StreamHandler()
     console.setFormatter(formatter)
@@ -112,397 +188,540 @@ def setup_logging(log_file: Path = None, level: int = logging.INFO) -> logging.L
 
 
 # =====================================================================
-# Step Implementations
+# Combination Generation (Supports Coarse and Fine Modes)
 # =====================================================================
 
-def step1_parse_and_calculate(config: Config, output_dir: Path,
-                               logger: logging.Logger,
-                               checkpoint: CheckpointManager) -> list:
-    """Step 1: Parse YAML configuration and calculate parameter combinations."""
-    logger.info("=" * 60)
-    logger.info("Step 1: Parsing YAML and Calculating Combinations")
-    logger.info("=" * 60)
+class CombinationGeneratorV2(CombinationGenerator):
+    """Enhanced combination generator with coarse and fine modes."""
 
-    # Check for existing checkpoint
-    cached = checkpoint.load(1)
-    if cached:
-        logger.info("Found checkpoint from previous Step 1 run")
-        combinations = cached.get('combinations', [])
-        logger.info(f"Loaded {len(combinations)} combinations from checkpoint")
-        return combinations
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.config = config
 
-    generator = CombinationGenerator(config.to_dict())
+    def generate_coarse(self, n_samples: int = None) -> List[dict]:
+        """Generate combinations covering full design space."""
+        if n_samples is None:
+            n_samples = self.config.get('sampling', {}).get('combo_count', 200)
 
-    total_combos = generator.total_combinations
-    max_combo = generator.max_combo
+        if self.total_combinations <= self.max_combo:
+            return self.generate_all()
+        else:
+            return self.generate_sampled(n_samples)
 
-    logger.info(f"Total design space: {total_combos} combinations")
-    logger.info(f"Max before sampling: {max_combo}")
+    def generate_fine(self, pareto_solutions: List[dict],
+                     n_samples_per_solution: int = 10,
+                     parameter_variation: float = 0.2) -> List[dict]:
+        """
+        Generate fine samples around Pareto solutions.
 
-    if total_combos <= max_combo:
-        logger.info(f"Using full enumeration ({total_combos} combinations)")
-        combinations = generator.generate_all()
-    else:
-        combo_count = config.to_dict().get('sampling', {}).get('combo_count', 200)
-        logger.info(f"Using LHS sampling ({combo_count} samples from {total_combos})")
-        combinations = generator.generate_sampled(combo_count)
+        For each Pareto solution, generate variations by slightly perturbing
+        each parameter within a percentage of its current value.
 
-    logger.info(f"Generated {len(combinations)} parameter combinations")
+        Args:
+            pareto_solutions: List of Pareto-optimal solutions
+            n_samples_per_solution: Number of samples per Pareto solution
+            parameter_variation: Fractional variation (0.2 = +/-20%)
 
-    # Save checkpoint
-    checkpoint.save(1, {
-        'combinations': combinations,
-        'total_combos': total_combos,
-        'sampled_count': len(combinations),
-        'timestamp': time.time(),
-    })
+        Returns:
+            List of fine-tuned parameter combinations
+        """
+        import random
+        import itertools
 
-    return combinations
+        fine_combinations = []
+
+        for sol in pareto_solutions:
+            # Get tunable parameter names
+            tunables = self._extract_tunable_names()
+
+            # Generate parameter variations
+            for _ in range(n_samples_per_solution):
+                variant = sol.copy()
+
+                for param_name in tunables:
+                    if param_name not in variant:
+                        continue
+
+                    original_value = variant[param_name]
+
+                    # Handle string parameters (VT options)
+                    if isinstance(original_value, str):
+                        if '_vt' in param_name:
+                            # For VT options, randomly switch to adjacent variant
+                            # Keep original with 60% probability, switch with 40%
+                            if random.random() < 0.4:
+                                _, vt_options = self._get_tunable_options(param_name)
+                                if len(vt_options) > 1:
+                                    current_idx = vt_options.index(original_value)
+                                    # Switch to adjacent or random different option
+                                    if current_idx == 0:
+                                        variant[param_name] = vt_options[1]
+                                    elif current_idx == len(vt_options) - 1:
+                                        variant[param_name] = vt_options[current_idx - 1]
+                                    else:
+                                        variant[param_name] = vt_options[current_idx + 1] if random.random() < 0.5 else vt_options[current_idx - 1]
+                            # else keep original
+                        continue
+
+                    # Handle numeric parameters (GL, nfin)
+                    if isinstance(original_value, (int, float)):
+                        variation = abs(original_value) * parameter_variation
+                        perturbation = random.uniform(-variation, variation)
+                        new_value = original_value + perturbation
+
+                        # Clamp to valid range based on tunable options
+                        _, options = self._get_tunable_options(param_name)
+                        if options:
+                            new_value = max(min(options), min(max(options), new_value))
+                            # Preserve integer type for nfin
+                            if isinstance(options[0], int):
+                                new_value = int(round(new_value))
+
+                        variant[param_name] = new_value
+
+                fine_combinations.append(variant)
+
+        return fine_combinations
+
+    def _get_tunable_options(self, param_name: str) -> tuple:
+        """Get options tuple for a parameter name from self.tunables."""
+        for name, options in self.tunables:
+            if name == param_name:
+                return (name, options)
+        return (param_name, [])
+
+    def _extract_tunable_names(self) -> List[str]:
+        """Extract all tunable parameter names (vt, gl, nfin for each device)."""
+        names = []
+        for group in self.config.get('groups', []):
+            if group.get('bundle_flag') not in set(self.config.get('active_bundles', [])):
+                continue
+            for device in group.get('devices', []):
+                base = device['name']
+                for opt_suffix in ['vt_options', 'gl_options', 'nfin_options']:
+                    if opt_suffix in device:
+                        names.append(f"{base}_{opt_suffix.rsplit('_', 1)[0]}")
+        return names
 
 
-def step2_spf_hack_and_submit(combinations: list, config: Config,
-                               output_dir: Path, logger: logging.Logger,
-                               checkpoint: CheckpointManager) -> dict:
+# =====================================================================
+# SPF Handler Interface (User Implements)
+# =====================================================================
+
+def submit_batch_simulation(combinations: List[dict],
+                           config: Config,
+                           output_dir: Path,
+                           logger: logging.Logger,
+                           stage: int) -> dict:
     """
-    Step 2: Generate modified SPFs and submit to simulation batch.
+    Submit batch simulation for combinations.
 
-    USER-IMPLEMENTED: See src/spf_handler.py for implementation guidelines.
+    USER IMPLEMENTATION REQUIRED:
+    =============================
+    This function should:
+    1. Generate modified SPFs for each combination
+    2. Submit to batch simulation system (HSPICE/Spectre)
+    3. Return submission info with job IDs
+
+    For now, returns placeholder - implement in src/spf_handler.py
     """
-    logger.info("=" * 60)
-    logger.info("Step 2: SPF Hack + Simulation Submission")
-    logger.info("=" * 60)
+    logger.info(f"[Stage {stage}] Batch simulation submission interface")
+    logger.info(f"[Stage {stage}] {len(combinations)} combinations to simulate")
 
+    sim_enabled = config.to_dict().get('simulation', {}).get('enabled', False)
     spf_path = config.spf_path
-    sim_config = config.to_dict().get('simulation', {})
 
-    if not spf_path or spf_path == '/path/to/your/sense_amp.spf':
-        logger.info("No SPF path configured - skipping Step 2")
-        return {'mode': 'none'}
+    if not sim_enabled or not spf_path or spf_path == '/path/to/your/sense_amp.spf':
+        logger.info(f"[Stage {stage}] Using analytical PPA model (no external simulation)")
+        return {
+            'mode': 'analytical',
+            'total': len(combinations),
+        }
 
-    if not sim_config.get('enabled', False):
-        logger.info("Simulation not enabled - skipping Step 2")
-        return {'mode': 'none'}
+    # USER IMPLEMENTATION REQUIRED:
+    # Implement your batch submission logic here
+    #
+    # Example structure:
+    # jobs = []
+    # for i, combo in enumerate(combinations):
+    #     modified_spf = apply_combination(combo, spf_template)
+    #     job_id = submit_to_hpc(modified_spf, output_dir / f'job_{i}')
+    #     jobs.append({'combo_idx': i, 'job_id': job_id, 'status': 'pending'})
+    #
+    # return {'mode': 'hpc', 'jobs': jobs, 'total': len(combinations)}
 
-    # Check for existing checkpoint
-    cached = checkpoint.load(2)
-    if cached:
-        logger.info("Found checkpoint from previous Step 2 run")
-        logger.info("To re-run Step 2, clear checkpoint first: --clear-checkpoint 2")
-        return cached.get('submission_info', {})
-
-    # USER IMPLEMENTATION REQUIRED in src/spf_handler.py
-    # See example implementation in spf_handler.py
-    logger.info("SPF simulation submission interface ready")
-    logger.info("Implement your SPF hack and batch submission in src/spf_handler.py")
-    logger.info("For now, using analytical PPA model as fallback")
-
-    return {'mode': 'none'}
+    return {
+        'mode': 'analytical',
+        'total': len(combinations),
+    }
 
 
-def step3_collect_ppa_results(config: Config, output_dir: Path,
-                              logger: logging.Logger, checkpoint: CheckpointManager,
-                              poll_interval: int = 60, poll_timeout: int = 7200) -> dict:
-    """Step 3: Poll for PPA results from simulation batch."""
-    logger.info("=" * 60)
-    logger.info("Step 3: Collecting PPA Results")
-    logger.info("=" * 60)
+def poll_and_collect_results(config: Config,
+                            output_dir: Path,
+                            logger: logging.Logger,
+                            stage: int,
+                            submission_info: dict,
+                            poll_interval: int = 60,
+                            poll_timeout: int = 7200) -> dict:
+    """
+    Poll simulation results and collect PPA values.
 
-    sim_config = config.to_dict().get('simulation', {})
-    use_external = sim_config.get('enabled', False)
+    USER IMPLEMENTATION REQUIRED:
+    =============================
+    This function should:
+    1. Poll job status from batch system
+    2. When complete, parse PPA from output
+    3. Handle failed jobs gracefully
+    4. Return {combo_idx: {area, power, delay}}
 
-    if not use_external:
-        logger.info("External simulation not enabled - using analytical PPA model")
+    For now, returns placeholder - implement in src/spf_handler.py
+    """
+    logger.info(f"[Stage {stage}] Result collection interface")
+    logger.info(f"[Stage {stage}] Poll interval: {poll_interval}s, Timeout: {poll_timeout}s")
+
+    if submission_info.get('mode') == 'analytical':
+        logger.info(f"[Stage {stage}] Analytical mode - no polling needed")
         return {'mode': 'analytical'}
 
-    # Check for Step 2 checkpoint
-    step2_data = checkpoint.load(2)
-    if not step2_data:
-        logger.error("Step 2 checkpoint not found. Run --step 2 first.")
-        return {'mode': 'error', 'error': 'No Step 2 checkpoint'}
+    # USER IMPLEMENTATION REQUIRED:
+    # Implement your polling logic here
+    #
+    # Example structure:
+    # results = {}
+    # pending = {j['combo_idx']: j for j in submission_info['jobs']}
+    #
+    # while pending and elapsed < poll_timeout:
+    #     for combo_idx, job in list(pending.items()):
+    #         status = check_job_status(job['job_id'])
+    #         if status == 'completed':
+    #             results[combo_idx] = parse_ppa_output(job['output_dir'])
+    #             del pending[combo_idx]
+    #         elif status == 'failed':
+    #             results[combo_idx] = None  # Mark as failed
+    #             del pending[combo_idx]
+    #
+    #     if pending:
+    #         time.sleep(poll_interval)
+    #
+    # return {'mode': 'hpc', 'results': results}
 
-    submission_info = step2_data.get('submission_info', {})
-    jobs = submission_info.get('jobs', [])
-
-    if not jobs:
-        logger.error("No jobs found in Step 2 checkpoint")
-        return {'mode': 'error', 'error': 'No jobs to poll'}
-
-    logger.info(f"Polling for {len(jobs)} simulation jobs...")
-    logger.info(f"Poll interval: {poll_interval}s, Timeout: {poll_timeout}s")
-
-    # USER IMPLEMENTATION REQUIRED: See src/spf_handler.py
-    # Implement result polling from your batch system
-    logger.info("Result polling interface ready - implement in src/spf_handler.py")
-
-    return {'mode': 'placeholder', 'jobs': jobs}
-
-
-def step4_run_nsga(config: Config, fitness_fn, output_dir: Path,
-                   logger: logging.Logger, checkpoint: CheckpointManager) -> dict:
-    """Step 4: Run NSGA optimization."""
-    logger.info("=" * 60)
-    logger.info("Step 4: Running NSGA Optimization")
-    logger.info("=" * 60)
-
-    tunables = config.get_tunables()
-    n_combinations = config.get_total_combinations()
-
-    logger.info(f"Configuration: {config.top_name}")
-    logger.info(f"Design space: {n_combinations} combinations")
-    logger.info(f"Active bundles: {config.active_bundles}")
-    logger.info(f"Tunables: {len(tunables)} parameters")
-
-    algo_cfg = config.algorithm
-    nsga_config = AlgorithmConfig(
-        pop_size=algo_cfg.get('pop_size', 80),
-        n_gen=algo_cfg.get('n_gen', 60),
-        seed=algo_cfg.get('seed', 42),
-        crossover_prob=algo_cfg.get('crossover', {}).get('prob', 0.9),
-        sbx_eta=algo_cfg.get('crossover', {}).get('eta', 15.0),
-        mutation_prob=algo_cfg.get('mutation', {}).get('prob', 0.15),
-        pm_eta=algo_cfg.get('mutation', {}).get('eta', 20.0),
-        tournament_size=algo_cfg.get('selection', {}).get('tournament_size', 2),
-        use_nsga3=algo_cfg.get('name', 'NSGA-II') == 'NSGA-III',
-        n_partitions=algo_cfg.get('n_partitions', 12),
-    )
-
-    optimizer = NSGA(
-        config=nsga_config,
-        tunables=tunables,
-        evaluator=fitness_fn,
-        logger=logger,
-    )
-
-    algo_name = 'NSGA-III' if nsga_config.use_nsga3 else 'NSGA-II'
-    logger.info(f"Starting {algo_name}...")
-    logger.info(f"Population: {nsga_config.pop_size}, Generations: {nsga_config.n_gen}")
-
-    start_time = time.time()
-    results = optimizer.evolve()
-    elapsed = time.time() - start_time
-
-    logger.info(f"Optimization completed in {elapsed:.2f}s")
-    logger.info(f"Pareto solutions found: {len(results)}")
-
-    full_results = optimizer.get_results()
-
-    # Save checkpoint
-    checkpoint.save(4, {
-        'pareto_solutions': full_results.get('pareto_solutions', []),
-        'pareto_objectives': full_results.get('pareto_objectives', []),
-        'history': full_results.get('history', []),
-        'n_pareto': full_results.get('n_pareto', 0),
-        'elapsed': elapsed,
-        'timestamp': time.time(),
-    })
-
-    return full_results
+    return {'mode': 'placeholder'}
 
 
 # =====================================================================
-# Main Entry Point
+# PPA Evaluator with Combined Results Support
 # =====================================================================
 
-def run_pipeline(start_step: int, config: Config, args: argparse.Namespace,
-                logger: logging.Logger) -> dict:
-    """Run the optimization pipeline from start_step to step 4."""
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+class CombinedPPAEvaluator:
+    """
+    PPA evaluator that queries from combined simulation results.
+    Falls back to analytical model for missing combinations.
+    """
 
-    checkpoint = CheckpointManager(output_dir)
+    def __init__(self, analytical_evaluator, combined_results: Dict[int, dict]):
+        """
+        Args:
+            analytical_evaluator: PPAEvaluator instance for fallback
+            combined_results: {stage: {combo_idx: {area, power, delay}}}
+        """
+        self.analytical = analytical_evaluator
+        self.combined = combined_results
+        self._build_lookup_index()
 
-    # Clear checkpoints if requested
-    if args.clear_checkpoint is not None:
-        checkpoint.clear(args.clear_checkpoint if isinstance(args.clear_checkpoint, int) else None)
+    def _build_lookup_index(self):
+        """Build index for fast lookup by parameter combination."""
+        # This would need a hash-based lookup for exact matches
+        pass
+
+    def evaluate(self, combo_params: dict) -> List[float]:
+        """
+        Evaluate PPA for a combination.
+
+        Priority:
+        1. Stage 2 results (finest)
+        2. Stage 1 results
+        3. Analytical model fallback
+        """
+        # Try to find in Stage 2 results first (most refined)
+        for stage in sorted(self.combined.keys(), reverse=True):
+            results = self.combined[stage].get('results', {})
+            # User implements exact lookup here
+            # For now, fall through to analytical
+
+        # Fallback to analytical model
+        return self.analytical.evaluate(combo_params)
+
+
+# =====================================================================
+# Main Pipeline
+# =====================================================================
+
+def run_stage(stage: int, config: Config, stage_mgr: StageManager,
+             args: argparse.Namespace, logger: logging.Logger) -> dict:
+    """Run a single stage."""
+    stage_dir = stage_mgr.get_stage_dir(stage)
+    logger.info("=" * 60)
+    logger.info(f"STAGE {stage}: {'Coarse Search' if stage == 1 else 'Fine Search'}")
+    logger.info("=" * 60)
+
+    # Determine which step to start from
+    start_step = 1
 
     results = {}
-    combinations = []
-    use_external_sim = False
 
+    # =================================================================
     # Step 1: Generate combinations
+    # =================================================================
     if start_step <= 1:
-        combinations = step1_parse_and_calculate(config, output_dir, logger, checkpoint)
-        results['step1'] = {'combinations': combinations}
-    else:
-        cached = checkpoint.load(1)
-        combinations = cached.get('combinations', []) if cached else []
+        logger.info(f"[Stage {stage}] Step 1: Generating combinations")
 
-    # Step 2: Generate SPFs and submit
+        if stage == 1:
+            # Coarse: Full design space
+            generator = CombinationGeneratorV2(config.to_dict())
+            coarse_samples = config.to_dict().get('sampling', {}).get('coarse_samples', 200)
+            combinations = generator.generate_coarse(n_samples=coarse_samples)
+            logger.info(f"[Stage {stage}] Generated {len(combinations)} coarse combinations")
+
+            # Save checkpoint
+            stage_mgr.save_stage_checkpoint(stage, 'combinations', {
+                'combinations': combinations,
+                'mode': 'coarse',
+                'timestamp': time.time(),
+            })
+
+        else:
+            # Fine: Around Stage 1 Pareto front
+            stage1_checkpoint = stage_mgr.get_stage_checkpoint(1, 'pareto_solutions')
+            if not stage1_checkpoint:
+                logger.error("[Stage 2] Stage 1 Pareto solutions not found!")
+                logger.error("[Stage 2] Run --stage 1 first")
+                return results
+
+            pareto_solutions = stage1_checkpoint.get('pareto_solutions', [])
+            logger.info(f"[Stage 2] Loading {len(pareto_solutions)} Pareto solutions from Stage 1")
+
+            # Generate fine variations around each Pareto solution
+            generator = CombinationGeneratorV2(config.to_dict())
+            fine_samples_per = config.to_dict().get('sampling', {}).get('fine_samples_per_solution', 10)
+            variation_pct = config.to_dict().get('sampling', {}).get('parameter_variation', 0.2)
+
+            combinations = generator.generate_fine(
+                pareto_solutions,
+                n_samples_per_solution=fine_samples_per,
+                parameter_variation=variation_pct
+            )
+            logger.info(f"[Stage 2] Generated {len(combinations)} fine combinations")
+
+            # Save checkpoint
+            stage_mgr.save_stage_checkpoint(stage, 'combinations', {
+                'combinations': combinations,
+                'mode': 'fine',
+                'based_on': len(pareto_solutions),
+                'timestamp': time.time(),
+            })
+
+        results['step1'] = {'combinations': combinations}
+
+    # =================================================================
+    # Step 2: Submit batch simulation
+    # =================================================================
     if start_step <= 2:
-        submission_info = step2_spf_hack_and_submit(
-            combinations, config, output_dir, logger, checkpoint
+        logger.info(f"[Stage {stage}] Step 2: Batch simulation submission")
+
+        submission_info = submit_batch_simulation(
+            combinations, config, stage_dir, logger, stage
         )
         results['step2'] = {'submission_info': submission_info}
-        use_external_sim = submission_info.get('mode') == 'hpc'
 
+        stage_mgr.save_stage_checkpoint(stage, 'submission', submission_info)
+
+    # =================================================================
     # Step 3: Collect PPA results
+    # =================================================================
     if start_step <= 3:
-        ppa_results = step3_collect_ppa_results(
-            config, output_dir, logger, checkpoint,
+        logger.info(f"[Stage {stage}] Step 3: Collecting PPA results")
+
+        ppa_results = poll_and_collect_results(
+            config, stage_dir, logger, stage,
+            submission_info,
             poll_interval=args.poll_interval,
             poll_timeout=args.poll_timeout
         )
         results['step3'] = {'ppa_results': ppa_results}
-        use_external_sim = ppa_results.get('mode') == 'hpc'
 
+        stage_mgr.save_stage_checkpoint(stage, 'ppa_results', ppa_results)
+
+    # =================================================================
     # Step 4: Run NSGA optimization
+    # =================================================================
     if start_step <= 4:
+        logger.info(f"[Stage {stage}] Step 4: NSGA optimization")
+
         ppa_evaluator = create_evaluator(config.to_dict())
 
-        # Use external results or analytical model
-        if use_external_sim:
-            logger.info("Using external simulation results")
-            step3_data = checkpoint.load(3)
-            external_results = step3_data.get('ppa_results', {}).get('results', {})
+        # Determine if using external simulation results
+        use_external = ppa_results.get('mode') == 'hpc'
 
-            def external_fitness_fn(combo_params):
-                # Hash-based lookup (customize for your indexing)
-                idx = hash(str(sorted(combo_params.items()))) % max(1, len(external_results))
-                r = external_results.get(idx, {})
-                return [
-                    r.get('area', float('inf')),
-                    r.get('power', float('inf')),
-                    r.get('delay', float('inf')),
-                ]
-            fitness_fn = external_fitness_fn
+        if use_external:
+            logger.info(f"[Stage {stage}] Using external simulation results")
+            # Would need to implement lookup from combined results
+            fitness_fn = ppa_evaluator.evaluate
         else:
-            logger.info("Using analytical PPA model")
+            logger.info(f"[Stage {stage}] Using analytical PPA model")
             fitness_fn = ppa_evaluator.evaluate
 
-        nsga_results = step4_run_nsga(config, fitness_fn, output_dir, logger, checkpoint)
-        results['step4'] = nsga_results
+        # Algorithm config
+        algo_cfg = config.algorithm
+        nsga_config = AlgorithmConfig(
+            pop_size=algo_cfg.get('pop_size', 80),
+            n_gen=algo_cfg.get('n_gen', 60),
+            seed=algo_cfg.get('seed', 42),
+            crossover_prob=algo_cfg.get('crossover', {}).get('prob', 0.9),
+            sbx_eta=algo_cfg.get('crossover', {}).get('eta', 15.0),
+            mutation_prob=algo_cfg.get('mutation', {}).get('prob', 0.15),
+            pm_eta=algo_cfg.get('mutation', {}).get('eta', 20.0),
+            tournament_size=algo_cfg.get('selection', {}).get('tournament_size', 2),
+            use_nsga3=algo_cfg.get('name', 'NSGA-II') == 'NSGA-III',
+        )
+
+        tunables = config.get_tunables()
+
+        optimizer = NSGA(
+            config=nsga_config,
+            tunables=tunables,
+            evaluator=fitness_fn,
+            logger=logger,
+        )
+
+        # Register checkpoint callback to save population after each generation
+        def save_checkpoint(gen, population):
+            stage_mgr.save_population_checkpoint(stage, gen, population)
+
+        optimizer.config.checkpoint_fn = save_checkpoint
+
+        start_time = time.time()
+        pareto_front = optimizer.evolve()
+        elapsed = time.time() - start_time
+
+        logger.info(f"[Stage {stage}] Optimization completed in {elapsed:.2f}s")
+        logger.info(f"[Stage {stage}] Pareto solutions found: {len(pareto_front)}")
+
+        full_results = optimizer.get_results()
+
+        # Save Pareto solutions for Stage 2
+        stage_mgr.save_stage_checkpoint(stage, 'pareto_solutions', full_results)
+
+        results['step4'] = full_results
 
     return results
 
 
-def save_final_results(results: dict, config: Config, output_dir: Path,
-                       logger: logging.Logger) -> None:
-    """Save final optimization results."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    nsga_results = results.get('step4', {})
-
-    if isinstance(nsga_results, dict) and 'pareto_solutions' in nsga_results:
-        nsga_results['config'] = config.to_dict()
-        paths = export_all(nsga_results, output_dir)
-        for fmt, path in paths.items():
-            logger.info(f"{fmt.upper()} saved to {path}")
-    else:
-        with open(output_dir / 'step_results.json', 'w') as f:
-            json.dump(results, f, indent=2, default=str)
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description='SRAM DSO-MOGA: Multi-Objective Genetic Algorithm Optimizer',
+        description='SRAM DSO-MOGA: Two-Phase Optimization with Simulation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('--config', '-c', required=True,
-                       help='YAML configuration file path')
-    parser.add_argument('--output-dir', '-o', default='./results',
-                       help='Output directory (default: ./results)')
+    parser.add_argument('--config', '-c', required=True, help='YAML configuration file')
+    parser.add_argument('--output-dir', '-o', default='./results', help='Output directory')
 
-    # Step control (mutually exclusive)
-    step_group = parser.add_mutually_exclusive_group()
-    step_group.add_argument('--step', type=int, choices=[1, 2, 3, 4],
-                           help='Run a specific step only')
-    step_group.add_argument('--resume-from', type=int, choices=[1, 2, 3, 4],
-                           help='Resume from a specific step')
+    # Stage control
+    stage_group = parser.add_mutually_exclusive_group()
+    stage_group.add_argument('--stage', type=int, choices=[1, 2],
+                           help='Run specific stage only (1=coarse, 2=fine)')
+    stage_group.add_argument('--both', action='store_true',
+                           help='Run both stages sequentially')
 
-    # Checkpoint control
-    parser.add_argument('--clear-checkpoint', nargs='?', const=True, type=int,
-                       help='Clear checkpoint(s). Use --clear-checkpoint 2 for step 2, or no value for all')
+    # Sampling parameters
+    parser.add_argument('--coarse-samples', type=int,
+                       help='Number of samples for coarse search (Stage 1)')
+    parser.add_argument('--fine-samples', type=int,
+                       help='Number of fine samples per Pareto solution (Stage 2)')
+    parser.add_argument('--variation', type=float, default=0.2,
+                       help='Parameter variation fraction for fine search (default: 0.2 = +/-20%%)')
 
-    # Simulation polling options
+    # Polling parameters
     parser.add_argument('--poll-interval', type=int, default=60,
-                       help='Seconds between polling attempts (default: 60)')
+                       help='Simulation polling interval in seconds')
     parser.add_argument('--poll-timeout', type=int, default=7200,
-                       help='Max seconds to wait for results (default: 7200 = 2h)')
+                       help='Simulation polling timeout in seconds')
 
     # Algorithm overrides
-    parser.add_argument('--pop-size', type=int, help='Override population size')
-    parser.add_argument('--n-gen', type=int, help='Override number of generations')
-    parser.add_argument('--seed', type=int, help='Override random seed')
+    parser.add_argument('--pop-size', type=int, help='Population size')
+    parser.add_argument('--n-gen', type=int, help='Number of generations')
+    parser.add_argument('--seed', type=int, help='Random seed')
 
-    # Dashboard and logging
-    parser.add_argument('--dashboard', action='store_true',
-                       help='Run interactive dashboard after optimization')
-    parser.add_argument('--dashboard-port', type=int, default=8050,
-                       help='Dashboard port (default: 8050)')
+    # Logging
     parser.add_argument('--log', action='store_true', help='Save log to file')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
 
     args = parser.parse_args()
 
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    log_file = output_dir / 'moga.log' if args.log else None
-    logger = setup_logging(log_file, log_level)
+    stage_mgr = StageManager(output_dir)
+    logger = setup_logging(
+        output_dir / 'moga.log' if args.log else None,
+        log_level
+    )
 
     logger.info("=" * 60)
-    logger.info("SRAM DSO-MOGA v2.0")
+    logger.info("SRAM DSO-MOGA v2.1 (Two-Phase Optimization)")
     logger.info("=" * 60)
 
     try:
-        # Load configuration
+        # Load config
         config = load_config(args.config)
         logger.info(f"Loaded config: {args.config}")
 
-        # Apply overrides
+        # Apply sampling overrides
+        if args.coarse_samples:
+            if 'sampling' not in config._data:
+                config._data['sampling'] = {}
+            config._data['sampling']['coarse_samples'] = args.coarse_samples
+
+        if args.fine_samples:
+            if 'sampling' not in config._data:
+                config._data['sampling'] = {}
+            config._data['sampling']['fine_samples_per_solution'] = args.fine_samples
+
+        if args.variation:
+            if 'sampling' not in config._data:
+                config._data['sampling'] = {}
+            config._data['sampling']['parameter_variation'] = args.variation
+
+        # Apply algorithm overrides
         if args.pop_size:
             config._data['algorithm']['pop_size'] = args.pop_size
-            logger.info(f"Overriding pop_size: {args.pop_size}")
         if args.n_gen:
             config._data['algorithm']['n_gen'] = args.n_gen
-            logger.info(f"Overriding n_gen: {args.n_gen}")
         if args.seed:
             config._data['algorithm']['seed'] = args.seed
-            logger.info(f"Overriding seed: {args.seed}")
 
-        # Determine start step
-        if args.step:
-            start_step = args.step
-            logger.info(f"Running Step {start_step} only")
-        elif args.resume_from:
-            start_step = args.resume_from
-            logger.info(f"Resuming from Step {start_step}")
+        # Run stages
+        if args.stage:
+            results = run_stage(args.stage, config, stage_mgr, args, logger)
+        elif args.both:
+            logger.info("Running Stage 1 + Stage 2 sequentially")
+            results_s1 = run_stage(1, config, stage_mgr, args, logger)
+            results_s2 = run_stage(2, config, stage_mgr, args, logger)
+            results = {'stage1': results_s1, 'stage2': results_s2}
         else:
-            start_step = 1
-            logger.info("Running all steps sequentially")
-
-        # Run pipeline
-        results = run_pipeline(start_step, config, args, logger)
+            # Default: run both stages
+            logger.info("No --stage specified, running both stages")
+            results_s1 = run_stage(1, config, stage_mgr, args, logger)
+            results_s2 = run_stage(2, config, stage_mgr, args, logger)
+            results = {'stage1': results_s1, 'stage2': results_s2}
 
         # Save final results
-        save_final_results(results, config, output_dir, logger)
+        if 'stage2' in results and 'step4' in results['stage2']:
+            final_results = results['stage2']['step4']
+            final_results['config'] = config.to_dict()
+            export_all(final_results, output_dir / 'stage2')
+            logger.info("Final results saved to stage2/")
 
-        # Run dashboard if full pipeline
-        if args.dashboard and not args.step and not args.resume_from:
-            from dashboard import create_dashboard
+        logger.info("\nOptimization completed successfully!")
 
-            nsga_results = results.get('step4', {})
-            if isinstance(nsga_results, dict) and 'pareto_solutions' in nsga_results:
-                dashboard_results = {
-                    'pareto_solutions': nsga_results.get('pareto_solutions', []),
-                    'pareto_objectives': [[float(x) for x in obj]
-                                         for obj in nsga_results.get('pareto_objectives', [])],
-                    'history': nsga_results.get('history', []),
-                    'n_pareto': nsga_results.get('n_pareto', 0),
-                }
-                dash = create_dashboard(dashboard_results, config.to_dict(), output_dir)
-                logger.info(f"Starting dashboard on port {args.dashboard_port}...")
-                dash.run(port=args.dashboard_port, debug=True)
-        elif args.dashboard:
-            logger.warning("Dashboard only available when running full pipeline")
-
-        logger.info("\nExecution completed successfully!")
-
-    except FileNotFoundError as e:
-        logger.error(f"Config file not found: {e}")
-        sys.exit(1)
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         sys.exit(1)
