@@ -1442,9 +1442,9 @@ class Dashboard:
                 f'{delay_val[0]} - {delay_val[1]}',
             ]
 
-    def run(self, port: int = 8050, debug: bool = False) -> None:
+    def run(self, port: int = 8050, debug: bool = False, host: str = '0.0.0.0') -> None:
         """Run the dashboard server."""
-        self.app.run(debug=debug, port=port, host='0.0.0.0')
+        self.app.run(debug=debug, port=port, host=host)
 
     def save_html(self, path: Optional[Path] = None) -> Path:
         """Export dashboard as standalone HTML."""
