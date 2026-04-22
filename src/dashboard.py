@@ -790,13 +790,9 @@ class Dashboard:
 
     def _create_layout(self) -> html.Div:
         """Create main dashboard layout."""
+        # For the interactive dashboard, CSS/JS are injected via external assets
+        # See assets/ folder for custom CSS/JS files
         return html.Div([
-            # Theme stylesheet
-            html.Style(get_theme_css(Theme.DARK)),
-
-            # Theme toggle script
-            html.Script(get_dark_mode_script()),
-
             # Header
             self._create_header(),
 
@@ -860,25 +856,18 @@ class Dashboard:
                 html.Div([
                     html.Div([
                         html.Button(
-                            html.Svg(viewBox='0 0 24 24', fill='none', stroke='currentColor',
-                                     children=[
-                                         html.Path(d='M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707'),
-                                         html.Circle(cx='12', cy='12', r='4', stroke_width='2'),
-                                     ]),
+                            '☀',
                             className='theme-btn active',
                             id='btn-light',
-                            data_theme='light',
-                            title='Light Mode'
+                            title='Light Mode',
+                            n_clicks=0,
                         ),
                         html.Button(
-                            html.Svg(viewBox='0 0 24 24', fill='none', stroke='currentColor',
-                                     children=[
-                                         html.Path(d='M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z'),
-                                     ]),
+                            '☾',
                             className='theme-btn',
                             id='btn-dark',
-                            data_theme='dark',
-                            title='Dark Mode'
+                            title='Dark Mode',
+                            n_clicks=0,
                         ),
                     ], className='theme-toggle'),
                 ], className='status-indicator'),
@@ -1185,22 +1174,23 @@ class Dashboard:
 
         # Row 2: Parallel coordinates style (normalized)
         obj_norm = (obj - obj.min(axis=0)) / (obj.max(axis=0) - obj.min(axis=0) + 1e-10)
+        n_points = len(obj)
 
         fig.add_trace(
             go.Scatter(x=obj_norm[:, 0], y=obj_norm[:, 1], mode='markers',
-                      marker=dict(color=range(len(obj)), colorscale='Viridis', size=7),
+                      marker=dict(color=list(range(n_points)), colorscale='Viridis', size=7),
                       showlegend=False),
             row=2, col=1
         )
         fig.add_trace(
             go.Scatter(x=obj_norm[:, 0], y=obj_norm[:, 2], mode='markers',
-                      marker=dict(color=range(len(obj)), colorscale='Viridis', size=7),
+                      marker=dict(color=list(range(n_points)), colorscale='Viridis', size=7),
                       showlegend=False),
             row=2, col=2
         )
         fig.add_trace(
             go.Scatter(x=obj_norm[:, 1], y=obj_norm[:, 2], mode='markers',
-                      marker=dict(color=range(len(obj)), colorscale='Viridis', size=7),
+                      marker=dict(color=list(range(n_points)), colorscale='Viridis', size=7),
                       showlegend=False),
             row=2, col=3
         )
@@ -1490,9 +1480,16 @@ class Dashboard:
             title='SRAM DSO-MOGA Results',
             height=800,
             showlegend=False,
+            paper_bgcolor='#1a1f2e',
+            plot_bgcolor='#1a1f2e',
+            font=dict(color='#94a3b8'),
         )
 
-        fig.write_html(str(path), include_plotlyjs='cdn')
+        fig.write_html(
+            str(path),
+            include_plotlyjs='cdn',
+            full_html=True,
+        )
         return path
 
 

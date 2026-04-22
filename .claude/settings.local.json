@@ -15,7 +15,16 @@
       "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 10 --output-dir results/full_test)",
       "Bash(python run_moga.py --config config/sram_config_v2.yaml --pop-size 50 --n-gen 10 --output-dir results/full_test2)",
       "Bash(python run_moga.py --config config/sram_config_v2.yaml --step 4 --resume-from 4 --pop-size 30 --n-gen 5 --output-dir results/resume_test)",
-      "Bash(python run_moga.py --config config/sram_config_v2.yaml --resume-from 4 --pop-size 30 --n-gen 5 --output-dir results/resume_test)"
+      "Bash(python run_moga.py --config config/sram_config_v2.yaml --resume-from 4 --pop-size 30 --n-gen 5 --output-dir results/resume_test)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(gh run:*)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(python:*)",
+      "Bash(git checkout:*)",
+      "Bash(python3:*)"
     ]
   }
 }

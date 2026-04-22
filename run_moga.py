@@ -924,6 +924,7 @@ def _handle_export(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         results = json.load(f)
 
     # Import here to avoid circular imports
+    from src.exporter import export_json, export_csv
     from src.dashboard import create_dashboard
     from src.config import load_config
 
@@ -931,24 +932,35 @@ def _handle_export(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
 
     formats = args.format if args.format != ['all'] else ['json', 'csv', 'html']
 
+    print("\n" + "=" * 60)
+    print(f"Exporting Stage {args.stage} Results")
+    print("=" * 60)
+
     if 'json' in formats:
-        print(f"JSON already exists: {results_file}")
+        json_path = stage_dir / 'results.json'
+        export_json(results, json_path)
+        print(f"  JSON: {json_path.resolve()}")
 
     if 'csv' in formats:
         csv_path = stage_dir / 'pareto_solutions.csv'
-        if csv_path.exists():
-            print(f"CSV already exists: {csv_path}")
+        export_csv(
+            results.get('pareto_solutions', []),
+            results.get('pareto_objectives', []),
+            csv_path
+        )
+        print(f"  CSV:  {csv_path.resolve()}")
 
     if 'html' in formats:
         # Create static dashboard HTML
         try:
             dash = create_dashboard(results, config.to_dict(), stage_dir)
             html_path = dash.save_html(stage_dir / 'dashboard.html')
-            print(f"HTML dashboard exported: {html_path}")
+            print(f"  HTML: {html_path.resolve()}")
         except Exception as e:
-            print(f"Warning: Could not export HTML dashboard: {e}")
+            print(f"  HTML: Failed - {e}")
 
     print(f"\nExport complete for Stage {args.stage} results")
+    print(f"Output directory: {stage_dir.resolve()}")
 
 
 def _handle_dashboard(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
