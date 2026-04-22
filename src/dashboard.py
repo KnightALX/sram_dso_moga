@@ -1,21 +1,21 @@
 """
 SRAM DSO-MOGA: Professional EDA-Style Dashboard.
 
-Provides interactive visualization and analysis of optimization results
-using Plotly Dash with light/dark theme support.
+Professional EDA tool aesthetic for multi-objective genetic algorithm optimization results.
+Inspired by Cadence Virtuoso, Synopsys Design Compiler - industrial/utilitarian design.
 
-Visual Language: Technical Precision
-- Inspired by professional EDA tools (Cadence Virtuoso, Synopsys)
-- Monospace fonts for data, clean sans-serif for UI
-- Muted backgrounds with sharp accent colors
-- Dense information displays with clear hierarchy
+Features:
+- Light/dark theme with persistent toggle
+- Left sidebar for controls and filters
+- Right panel for visualizations and data
+- Real-time Pareto front analysis
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -25,620 +25,595 @@ from plotly.subplots import make_subplots
 from dash import (
     Dash, dcc, html, dash_table,
     State, Input, Output, callback_context as cb_context,
-    DiskcacheManager, CeleryManager
 )
 
 
 # =============================================================================
-# Theme System
+# EDA Theme System
 # =============================================================================
 
-class Theme:
-    """Theme manager with light/dark mode support."""
+class EDATheme:
+    """Professional EDA tool theme with light/dark mode support."""
 
-    # Light theme - Clean technical white
+    # Dark Theme - Industrial EDA aesthetic
+    DARK = {
+        'name': 'dark',
+        'bg_primary': '#0d1117',      # GitHub dark-style background
+        'bg_secondary': '#161b22',    # Elevated panels
+        'bg_tertiary': '#21262d',    # Cards and inputs
+        'bg_hover': '#30363d',        # Hover states
+        'bg_input': '#0d1117',        # Input backgrounds
+        'border_primary': '#30363d',  # Borders
+        'border_secondary': '#21262d',
+        'border_active': '#58a6ff',
+        'text_primary': '#e6edf3',    # Primary text
+        'text_secondary': '#8b949e',  # Secondary text
+        'text_muted': '#6e7681',     # Muted text
+        'text_accent': '#58a6ff',     # Accent text
+        'status_pass': '#3fb950',     # Green - pass
+        'status_fail': '#f85149',     # Red - fail
+        'status_warning': '#d29922',  # Amber - warning
+        'status_info': '#58a6ff',     # Blue - info
+        'accent_primary': '#58a6ff',  # Primary blue
+        'accent_secondary': '#79c0ff',
+        'button_primary': '#238636',
+        'button_hover': '#2ea043',
+        'button_active': '#1a7f37',
+        'graph_bg': '#0d1117',
+        'shadow_sm': '0 1px 2px rgba(0, 0, 0, 0.3)',
+        'shadow_md': '0 4px 6px rgba(0, 0, 0, 0.4)',
+        'shadow_lg': '0 10px 15px rgba(0, 0, 0, 0.5)',
+    }
+
+    # Light Theme - Clean technical white
     LIGHT = {
         'name': 'light',
         'bg_primary': '#ffffff',
-        'bg_secondary': '#f8f9fa',
-        'bg_tertiary': '#e9ecef',
-        'bg_hover': '#dee2e6',
-        'bg_card': '#ffffff',
-        'border': '#ced4da',
-        'border_light': '#e9ecef',
-        'text_primary': '#212529',
-        'text_secondary': '#495057',
-        'text_muted': '#6c757d',
-        'accent': '#2563eb',
-        'accent_hover': '#1d4ed8',
-        'accent_light': '#dbeafe',
-        'status_pass': '#16a34a',
-        'status_fail': '#dc2626',
-        'status_warning': '#d97706',
-        'chart_bg': '#ffffff',
-        'chart_grid': '#f1f3f5',
-        'shadow': 'rgba(0,0,0,0.08)',
-        'shadow_hover': 'rgba(0,0,0,0.12)',
-    }
-
-    # Dark theme - Deep technical slate
-    DARK = {
-        'name': 'dark',
-        'bg_primary': '#0f1419',
-        'bg_secondary': '#1a1f2e',
-        'bg_tertiary': '#242938',
-        'bg_hover': '#2d3344',
-        'bg_card': '#1a1f2e',
-        'border': '#374151',
-        'border_light': '#2d3344',
-        'text_primary': '#f1f5f9',
-        'text_secondary': '#94a3b8',
-        'text_muted': '#64748b',
-        'accent': '#3b82f6',
-        'accent_hover': '#60a5fa',
-        'accent_light': '#1e3a5f',
-        'status_pass': '#22c55e',
-        'status_fail': '#ef4444',
-        'status_warning': '#f59e0b',
-        'chart_bg': '#1a1f2e',
-        'chart_grid': '#2d3344',
-        'shadow': 'rgba(0,0,0,0.3)',
-        'shadow_hover': 'rgba(0,0,0,0.4)',
+        'bg_secondary': '#f6f8fa',
+        'bg_tertiary': '#eaeef2',
+        'bg_hover': '#d0d7de',
+        'bg_input': '#ffffff',
+        'border_primary': '#d0d7de',
+        'border_secondary': '#eaeef2',
+        'border_active': '#0969da',
+        'text_primary': '#1f2328',
+        'text_secondary': '#656d76',
+        'text_muted': '#8c959f',
+        'text_accent': '#0969da',
+        'status_pass': '#1a7f37',
+        'status_fail': '#cf222e',
+        'status_warning': '#9a6700',
+        'status_info': '#0969da',
+        'accent_primary': '#0969da',
+        'accent_secondary': '#0550ae',
+        'button_primary': '#2ea043',
+        'button_hover': '#238636',
+        'button_active': '#1a7f37',
+        'graph_bg': '#ffffff',
+        'shadow_sm': '0 1px 2px rgba(0, 0, 0, 0.08)',
+        'shadow_md': '0 4px 6px rgba(0, 0, 0, 0.1)',
+        'shadow_lg': '0 10px 15px rgba(0, 0, 0, 0.15)',
     }
 
     @classmethod
-    def get_theme(cls, mode: str) -> dict:
-        return cls.LIGHT if mode == 'light' else cls.DARK
+    def get(cls, mode: str) -> dict:
+        return cls.DARK if mode == 'dark' else cls.LIGHT
 
 
 # =============================================================================
 # CSS Styles
 # =============================================================================
 
-def get_theme_css(theme: dict) -> str:
-    """Generate theme-aware CSS."""
+def get_dash_css(theme: dict) -> str:
+    """Generate complete CSS for EDA-style dashboard."""
     return f"""
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
-    :root {{
-        --bg-primary: {theme['bg_primary']};
-        --bg-secondary: {theme['bg_secondary']};
-        --bg-tertiary: {theme['bg_tertiary']};
-        --bg-hover: {theme['bg_hover']};
-        --bg-card: {theme['bg_card']};
-        --border: {theme['border']};
-        --border-light: {theme['border_light']};
-        --text-primary: {theme['text_primary']};
-        --text-secondary: {theme['text_secondary']};
-        --text-muted: {theme['text_muted']};
-        --accent: {theme['accent']};
-        --accent-hover: {theme['accent_hover']};
-        --accent-light: {theme['accent_light']};
-        --status-pass: {theme['status_pass']};
-        --status-fail: {theme['status_fail']};
-        --status-warning: {theme['status_warning']};
-        --chart-bg: {theme['chart_bg']};
-        --chart-grid: {theme['chart_grid']};
-        --shadow: {theme['shadow']};
-        --shadow-hover: {theme['shadow_hover']};
-    }}
-
-    * {{
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-    }}
-
-    html, body {{
-        font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-        font-size: 14px;
-        line-height: 1.5;
-        background: var(--bg-primary);
-        color: var(--text-primary);
-        transition: background 0.3s ease, color 0.3s ease;
-    }}
-
-    .dashboard-container {{
-        min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-    }}
-
-    /* === Header Bar === */
-    .header-bar {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 24px;
-        height: 56px;
-        background: var(--bg-card);
-        border-bottom: 1px solid var(--border);
-        box-shadow: 0 1px 3px var(--shadow);
-        position: sticky;
-        top: 0;
-        z-index: 100;
-    }}
-
-    .header-left {{
-        display: flex;
-        align-items: baseline;
-        gap: 16px;
-    }}
-
-    .logo {{
-        font-size: 18px;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-        color: var(--text-primary);
-    }}
-
-    .subtitle {{
-        font-size: 12px;
-        color: var(--text-muted);
-        font-weight: 400;
-    }}
-
-    .header-right {{
-        display: flex;
-        align-items: center;
-        gap: 16px;
-    }}
-
-    .header-badge {{
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 12px;
-        background: var(--bg-tertiary);
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--text-secondary);
-    }}
-
-    .header-badge.accent {{
-        background: var(--accent-light);
-        border-color: var(--accent);
-        color: var(--accent);
-    }}
-
-    .status-indicator {{
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }}
-
-    .status-dot {{
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: var(--status-pass);
-        animation: pulse 2s infinite;
-    }}
-
-    @keyframes pulse {{
-        0%, 100% {{ opacity: 1; }}
-        50% {{ opacity: 0.5; }}
-    }}
-
-    .status-label {{
-        font-size: 12px;
-        color: var(--text-muted);
-        font-weight: 500;
-    }}
-
-    /* === Theme Toggle === */
-    .theme-toggle {{
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px;
-        background: var(--bg-tertiary);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-    }}
-
-    .theme-btn {{
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border: none;
-        border-radius: 4px;
-        background: transparent;
-        color: var(--text-muted);
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }}
-
-    .theme-btn:hover {{
-        background: var(--bg-hover);
-        color: var(--text-primary);
-    }}
-
-    .theme-btn.active {{
-        background: var(--accent);
-        color: white;
-    }}
-
-    .theme-btn svg {{
-        width: 18px;
-        height: 18px;
-    }}
-
-    /* === Main Layout === */
-    .main-layout {{
-        display: grid;
-        grid-template-columns: 280px 1fr 260px;
-        gap: 0;
-        flex: 1;
-        min-height: calc(100vh - 56px);
-    }}
-
-    /* === Sidebar === */
-    .sidebar {{
-        background: var(--bg-secondary);
-        border-right: 1px solid var(--border);
-        padding: 20px;
-        overflow-y: auto;
-    }}
-
-    .sidebar-section {{
-        margin-bottom: 24px;
-    }}
-
-    .section-title {{
-        display: block;
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-        margin-bottom: 12px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid var(--border-light);
-    }}
-
-    .form-group {{
-        margin-bottom: 16px;
-    }}
-
-    .form-label {{
-        display: block;
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--text-secondary);
-        margin-bottom: 6px;
-    }}
-
-    .input-field {{
-        width: 100%;
-        padding: 8px 12px;
-        background: var(--bg-primary);
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        font-family: 'IBM Plex Mono', monospace;
-        font-size: 13px;
-        color: var(--text-primary);
-        transition: border-color 0.2s ease;
-    }}
-
-    .input-field:focus {{
-        outline: none;
-        border-color: var(--accent);
-    }}
-
-    .dropdown {{
-        width: 100%;
-        padding: 8px 12px;
-        background: var(--bg-primary);
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        font-size: 13px;
-        color: var(--text-primary);
-    }}
-
-    /* Range Slider */
-    .range-slider {{
-        margin: 8px 0;
-    }}
-
-    .slider-labels {{
-        display: flex;
-        justify-content: space-between;
-        font-size: 11px;
-        font-family: 'IBM Plex Mono', monospace;
-        color: var(--text-muted);
-        margin-top: 4px;
-    }}
-
-    /* Buttons */
-    .btn-group {{
-        display: flex;
-        gap: 8px;
-    }}
-
-    .btn {{
-        flex: 1;
-        padding: 10px 16px;
-        border: 1px solid transparent;
-        border-radius: 4px;
-        font-family: 'IBM Plex Sans', sans-serif;
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }}
-
-    .btn-primary {{
-        background: var(--accent);
-        color: white;
-        border-color: var(--accent);
-    }}
-
-    .btn-primary:hover {{
-        background: var(--accent-hover);
-        border-color: var(--accent-hover);
-    }}
-
-    .btn-secondary {{
-        background: var(--bg-tertiary);
-        color: var(--text-secondary);
-        border-color: var(--border);
-    }}
-
-    .btn-secondary:hover {{
-        background: var(--bg-hover);
-        color: var(--text-primary);
-    }}
-
-    /* === Main Content === */
-    .main-content {{
-        padding: 0;
-        background: var(--bg-primary);
-        overflow-y: auto;
-    }}
-
-    /* Tabs */
-    .tab-header {{
-        padding: 20px 24px 0;
-    }}
-
-    .tab-header h3 {{
-        font-size: 16px;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 4px;
-    }}
-
-    .tab-header p {{
-        font-size: 13px;
-        color: var(--text-muted);
-    }}
-
-    /* === Right Panel === */
-    .right-panel {{
-        background: var(--bg-secondary);
-        border-left: 1px solid var(--border);
-        padding: 20px;
-        overflow-y: auto;
-    }}
-
-    .panel-header {{
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-        margin-bottom: 16px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid var(--border-light);
-    }}
-
-    .panel-content {{
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }}
-
-    .metric-card {{
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 12px;
-        transition: all 0.2s ease;
-    }}
-
-    .metric-card:hover {{
-        border-color: var(--accent);
-        box-shadow: 0 2px 8px var(--shadow);
-    }}
-
-    .metric-label {{
-        font-size: 11px;
-        font-weight: 500;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-        margin-bottom: 4px;
-    }}
-
-    .metric-value {{
-        font-size: 24px;
-        font-weight: 700;
-        font-family: 'IBM Plex Mono', monospace;
-        color: var(--text-primary);
-        line-height: 1.2;
-    }}
-
-    .metric-unit {{
-        font-size: 12px;
-        font-weight: 400;
-        color: var(--text-muted);
-        margin-left: 4px;
-    }}
-
-    .metric-subtext {{
-        font-size: 11px;
-        color: var(--text-muted);
-        margin-top: 4px;
-    }}
-
-    .divider {{
-        border: none;
-        border-top: 1px solid var(--border);
-        margin: 8px 0;
-    }}
-
-    /* === Chart Containers === */
-    .chart-container {{
-        background: var(--chart-bg);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 16px;
-        margin: 16px 24px;
-    }}
-
-    .chart-container-full {{
-        background: var(--chart-bg);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 16px;
-        margin: 16px;
-    }}
-
-    /* === Stats Grid === */
-    .stats-grid {{
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 12px;
-        margin: 16px 24px;
-    }}
-
-    .stat-card {{
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 12px 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }}
-
-    .stat-label {{
-        font-size: 11px;
-        font-weight: 500;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }}
-
-    .stat-value {{
-        font-size: 20px;
-        font-weight: 700;
-        font-family: 'IBM Plex Mono', monospace;
-        color: var(--text-primary);
-    }}
-
-    /* === Data Table === */
-    .data-table-container {{
-        margin: 16px 24px;
-        background: var(--bg-card);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        overflow: hidden;
-    }}
-
-    /* === Tab Content Layout === */
-    .tab-content {{
-        padding: 16px 24px;
-    }}
-
-    .tab-grid {{
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
-        margin-top: 16px;
-    }}
-
-    .tab-grid-2col {{
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 16px;
-        margin-top: 16px;
-    }}
-
-    /* === Analysis Text === */
-    .analysis-text {{
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 16px;
-        margin: 16px 24px;
-    }}
-
-    .analysis-text h4 {{
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 8px;
-    }}
-
-    .analysis-text p {{
-        font-size: 13px;
-        color: var(--text-secondary);
-        line-height: 1.6;
-    }}
-
-    /* === Pareto Badge === */
-    .pareto-badge {{
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 8px;
-        background: var(--accent-light);
-        color: var(--accent);
-        border-radius: 3px;
-        font-size: 11px;
-        font-weight: 600;
-    }}
-
-    /* === Empty State === */
-    .empty-state {{
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 48px;
-        color: var(--text-muted);
-    }}
-
-    .empty-state svg {{
-        width: 48px;
-        height: 48px;
-        margin-bottom: 16px;
-        opacity: 0.5;
-    }}
-    """
-
-
-def get_dark_mode_script() -> str:
+/* === Reset & Base === */
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+
+:root {{
+    --bg-primary: {theme['bg_primary']};
+    --bg-secondary: {theme['bg_secondary']};
+    --bg-tertiary: {theme['bg_tertiary']};
+    --bg-hover: {theme['bg_hover']};
+    --bg-input: {theme['bg_input']};
+    --border-primary: {theme['border_primary']};
+    --border-secondary: {theme['border_secondary']};
+    --border-active: {theme['border_active']};
+    --text-primary: {theme['text_primary']};
+    --text-secondary: {theme['text_secondary']};
+    --text-muted: {theme['text_muted']};
+    --text-accent: {theme['text_accent']};
+    --status-pass: {theme['status_pass']};
+    --status-fail: {theme['status_fail']};
+    --status-warning: {theme['status_warning']};
+    --status-info: {theme['status_info']};
+    --accent-primary: {theme['accent_primary']};
+    --accent-secondary: {theme['accent_secondary']};
+    --button-primary: {theme['button_primary']};
+    --button-hover: {theme['button_hover']};
+    --button-active: {theme['button_active']};
+    --graph-bg: {theme['graph_bg']};
+    --shadow-sm: {theme['shadow_sm']};
+    --shadow-md: {theme['shadow_md']};
+    --shadow-lg: {theme['shadow_lg']};
+
+    /* Typography */
+    --font-display: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+    --font-body: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-data: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+
+    /* Spacing */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 16px;
+    --space-xl: 20px;
+    --space-2xl: 24px;
+
+    /* Radius */
+    --radius-sm: 3px;
+    --radius-md: 5px;
+    --radius-lg: 8px;
+}}
+
+html, body {{
+    height: 100%;
+    overflow: hidden;
+}}
+
+body {{
+    font-family: var(--font-body);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    transition: background-color 0.2s ease, color 0.2s ease;
+}}
+
+/* === Scrollbar === */
+::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+::-webkit-scrollbar-track {{ background: var(--bg-secondary); }}
+::-webkit-scrollbar-thumb {{ background: var(--border-primary); border-radius: 4px; }}
+::-webkit-scrollbar-thumb:hover {{ background: var(--accent-primary); }}
+::-webkit-scrollbar-corner {{ background: var(--bg-secondary); }}
+
+/* === App Container === */
+.app-container {{
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}}
+
+/* === Header Bar === */
+.header-bar {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 44px;
+    padding: 0 var(--space-lg);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-primary);
+    flex-shrink: 0;
+}}
+
+.header-left {{
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+}}
+
+.header-logo {{
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-accent);
+    letter-spacing: 0.05em;
+}}
+
+.header-subtitle {{
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}}
+
+.header-right {{
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}}
+
+.header-badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: var(--font-data);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    color: var(--text-secondary);
+}}
+
+.header-badge.accent {{
+    background: rgba(88, 166, 255, 0.15);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}}
+
+.status-dot {{
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--status-pass);
+}}
+
+/* === Theme Toggle === */
+.theme-toggle {{
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    border-radius: 20px;
+    gap: 2px;
+}}
+
+.theme-btn {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 16px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}}
+
+.theme-btn:hover {{
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}}
+
+.theme-btn.active {{
+    background: var(--accent-primary);
+    color: white;
+}}
+
+/* === Main Content === */
+.main-content {{
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}}
+
+/* === Left Sidebar === */
+.sidebar {{
+    width: 280px;
+    min-width: 280px;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-primary);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}}
+
+.sidebar-section {{
+    padding: var(--space-md);
+    border-bottom: 1px solid var(--border-secondary);
+}}
+
+.sidebar-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-md);
+}}
+
+.sidebar-title {{
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}}
+
+.form-group {{
+    margin-bottom: var(--space-md);
+}}
+
+.form-group:last-child {{
+    margin-bottom: 0;
+}}
+
+.form-label {{
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-xs);
+}}
+
+.form-select {{
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: var(--font-body);
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: border-color 0.2s;
+}}
+
+.form-select:focus {{
+    outline: none;
+    border-color: var(--accent-primary);
+}}
+
+.range-slider-container {{
+    padding: var(--space-sm) 0;
+}}
+
+.range-labels {{
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    font-family: var(--font-data);
+    color: var(--text-muted);
+    margin-top: var(--space-xs);
+}}
+
+/* === Right Panel === */
+.right-panel {{
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg-primary);
+}}
+
+.panel-header {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-md) var(--space-lg);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-primary);
+    flex-shrink: 0;
+}}
+
+.panel-title {{
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}}
+
+.panel-tabs {{
+    display: flex;
+    gap: var(--space-xs);
+}}
+
+.panel-tab {{
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s;
+}}
+
+.panel-tab:hover {{
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}}
+
+.panel-tab.active {{
+    color: var(--accent-primary);
+    background: rgba(88, 166, 255, 0.1);
+    border-color: var(--accent-primary);
+}}
+
+/* === Chart Area === */
+.chart-container {{
+    flex: 1;
+    padding: var(--space-lg);
+    overflow: auto;
+}}
+
+/* === Metrics Grid === */
+.metrics-grid {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-md);
+    padding: var(--space-lg);
+}}
+
+.metric-card {{
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    transition: all 0.2s;
+}}
+
+.metric-card:hover {{
+    border-color: var(--accent-primary);
+    box-shadow: var(--shadow-sm);
+}}
+
+.metric-label {{
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: var(--space-xs);
+}}
+
+.metric-value {{
+    font-size: 24px;
+    font-weight: 700;
+    font-family: var(--font-data);
+    color: var(--text-primary);
+    line-height: 1.2;
+}}
+
+.metric-value.best {{
+    color: var(--status-pass);
+}}
+
+.metric-unit {{
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-muted);
+    margin-left: 2px;
+}}
+
+.metric-subtext {{
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: var(--space-xs);
+}}
+
+/* === Data Table === */
+.data-table-wrapper {{
+    flex: 1;
+    overflow: auto;
+    padding: var(--space-lg);
+}}
+
+/* === Stats Cards === */
+.stats-row {{
+    display: flex;
+    gap: var(--space-md);
+    padding: var(--space-md) var(--space-lg);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-primary);
+}}
+
+.stat-item {{
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}}
+
+.stat-value {{
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--font-data);
+    color: var(--text-primary);
+}}
+
+.stat-label {{
+    font-size: 11px;
+    color: var(--text-muted);
+}}
+
+/* === Empty State === */
+.empty-state {{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+}}
+
+.empty-state-icon {{
+    font-size: 48px;
+    margin-bottom: var(--space-lg);
+    opacity: 0.5;
+}}
+
+/* === Tabs === */
+.tabs-container {{
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}}
+
+.tab-content {{
+    flex: 1;
+    overflow: auto;
+}}
+
+/* Dash overrides */
+.dash-tabs {{
+    background: var(--bg-secondary) !important;
+    border-bottom: 1px solid var(--border-primary) !important;
+}}
+
+.dash-tab {{
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    color: var(--text-secondary) !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 10px 16px !important;
+}}
+
+.dash-tab:hover {{
+    color: var(--text-primary) !important;
+    background: var(--bg-hover) !important;
+}}
+
+.dash-tab--selected {{
+    color: var(--accent-primary) !important;
+    border-top: 2px solid var(--accent-primary) !important;
+}}
+
+/* Data Table */
+.dash-table {{
+    background: var(--bg-secondary) !important;
+}}
+
+.dash-table-container {{
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border-primary) !important;
+    border-radius: var(--radius-md) !important;
+}}
+
+.dash-header {{
+    background: var(--bg-tertiary) !important;
+    color: var(--text-primary) !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    font-size: 10px !important;
+    letter-spacing: 0.05em;
+}}
+
+.dash-cell {{
+    color: var(--text-primary) !important;
+    font-family: var(--font-data) !important;
+    font-size: 12px !important;
+}}
+"""
+
+
+def get_theme_script() -> str:
     """JavaScript for theme toggle functionality."""
     return """
-    // Theme toggle functionality
+    // Theme Toggle Logic
     document.addEventListener('DOMContentLoaded', function() {
-        // Initialize from localStorage or system preference
-        const savedTheme = localStorage.getItem('sram-dashboard-theme');
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        const initialTheme = savedTheme || (prefersDark ? 'dark' : 'light');
-
-        setTheme(initialTheme);
+        // Initialize theme from localStorage or system preference
+        const savedTheme = localStorage.getItem('sram-dashboard-theme') || 'dark';
+        setTheme(savedTheme);
 
         // Theme button click handlers
         document.querySelectorAll('.theme-btn').forEach(btn => {
             btn.addEventListener('click', function() {
-                const theme = this.getAttribute('data-theme');
+                const theme = this.dataset.theme;
                 setTheme(theme);
                 localStorage.setItem('sram-dashboard-theme', theme);
             });
@@ -646,51 +621,59 @@ def get_dark_mode_script() -> str:
     });
 
     function setTheme(theme) {
-        // Update CSS variables
-        const styles = document.querySelector('style[data-theme]');
         const isDark = theme === 'dark';
         const colors = isDark ? {
-            '--bg-primary': '#0f1419',
-            '--bg-secondary': '#1a1f2e',
-            '--bg-tertiary': '#242938',
-            '--bg-hover': '#2d3344',
-            '--bg-card': '#1a1f2e',
-            '--border': '#374151',
-            '--border-light': '#2d3344',
-            '--text-primary': '#f1f5f9',
-            '--text-secondary': '#94a3b8',
-            '--text-muted': '#64748b',
-            '--accent': '#3b82f6',
-            '--accent-hover': '#60a5fa',
-            '--accent-light': '#1e3a5f',
-            '--status-pass': '#22c55e',
-            '--status-fail': '#ef4444',
-            '--status-warning': '#f59e0b',
-            '--chart-bg': '#1a1f2e',
-            '--chart-grid': '#2d3344',
-            '--shadow': 'rgba(0,0,0,0.3)',
-            '--shadow-hover': 'rgba(0,0,0,0.4)',
+            '--bg-primary': '#0d1117',
+            '--bg-secondary': '#161b22',
+            '--bg-tertiary': '#21262d',
+            '--bg-hover': '#30363d',
+            '--bg-input': '#0d1117',
+            '--border-primary': '#30363d',
+            '--border-secondary': '#21262d',
+            '--border-active': '#58a6ff',
+            '--text-primary': '#e6edf3',
+            '--text-secondary': '#8b949e',
+            '--text-muted': '#6e7681',
+            '--text-accent': '#58a6ff',
+            '--status-pass': '#3fb950',
+            '--status-fail': '#f85149',
+            '--status-warning': '#d29922',
+            '--status-info': '#58a6ff',
+            '--accent-primary': '#58a6ff',
+            '--accent-secondary': '#79c0ff',
+            '--button-primary': '#238636',
+            '--button-hover': '#2ea043',
+            '--button-active': '#1a7f37',
+            '--graph-bg': '#0d1117',
+            '--shadow-sm': '0 1px 2px rgba(0, 0, 0, 0.3)',
+            '--shadow-md': '0 4px 6px rgba(0, 0, 0, 0.4)',
+            '--shadow-lg': '0 10px 15px rgba(0, 0, 0, 0.5)',
         } : {
             '--bg-primary': '#ffffff',
-            '--bg-secondary': '#f8f9fa',
-            '--bg-tertiary': '#e9ecef',
-            '--bg-hover': '#dee2e6',
-            '--bg-card': '#ffffff',
-            '--border': '#ced4da',
-            '--border-light': '#e9ecef',
-            '--text-primary': '#212529',
-            '--text-secondary': '#495057',
-            '--text-muted': '#6c757d',
-            '--accent': '#2563eb',
-            '--accent-hover': '#1d4ed8',
-            '--accent-light': '#dbeafe',
-            '--status-pass': '#16a34a',
-            '--status-fail': '#dc2626',
-            '--status-warning': '#d97706',
-            '--chart-bg': '#ffffff',
-            '--chart-grid': '#f1f3f5',
-            '--shadow': 'rgba(0,0,0,0.08)',
-            '--shadow-hover': 'rgba(0,0,0,0.12)',
+            '--bg-secondary': '#f6f8fa',
+            '--bg-tertiary': '#eaeef2',
+            '--bg-hover': '#d0d7de',
+            '--bg-input': '#ffffff',
+            '--border-primary': '#d0d7de',
+            '--border-secondary': '#eaeef2',
+            '--border-active': '#0969da',
+            '--text-primary': '#1f2328',
+            '--text-secondary': '#656d76',
+            '--text-muted': '#8c959f',
+            '--text-accent': '#0969da',
+            '--status-pass': '#1a7f37',
+            '--status-fail': '#cf222e',
+            '--status-warning': '#9a6700',
+            '--status-info': '#0969da',
+            '--accent-primary': '#0969da',
+            '--accent-secondary': '#0550ae',
+            '--button-primary': '#2ea043',
+            '--button-hover': '#238636',
+            '--button-active': '#1a7f37',
+            '--graph-bg': '#ffffff',
+            '--shadow-sm': '0 1px 2px rgba(0, 0, 0, 0.08)',
+            '--shadow-md': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            '--shadow-lg': '0 10px 15px rgba(0, 0, 0, 0.15)',
         };
 
         // Apply CSS variables to root
@@ -701,10 +684,10 @@ def get_dark_mode_script() -> str:
 
         // Update button states
         document.querySelectorAll('.theme-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.getAttribute('data-theme') === theme);
+            btn.classList.toggle('active', btn.dataset.theme === theme);
         });
 
-        // Dispatch custom event for Plotly charts
+        // Dispatch event for Plotly charts
         window.dispatchEvent(new CustomEvent('theme-change', { detail: { theme } }));
     }
     """
@@ -715,18 +698,17 @@ def get_dark_mode_script() -> str:
 # =============================================================================
 
 class Dashboard:
-    """Interactive dashboard for MOGA results with theme support."""
+    """Professional EDA-style dashboard for MOGA optimization results."""
 
     def __init__(self, results: dict, config: dict, output_dir: Path):
         self.results = results
         self.config = config
         self.output_dir = output_dir
-        self.current_theme = 'dark'  # Default theme
+        self.current_theme = 'dark'
 
         # Build data structures
         self.pareto_df = self._build_pareto_df()
         self.convergence_data = self._build_convergence_data()
-        self.param_df = self._build_param_df()
 
         self.app = self._create_app()
 
@@ -738,8 +720,7 @@ class Dashboard:
         df = pd.DataFrame(solutions)
         obj_df = pd.DataFrame(objectives, columns=['Area', 'Power', 'Delay'])
         df = pd.concat([df, obj_df], axis=1)
-        df['Solution ID'] = range(1, len(df) + 1)
-
+        df['ID'] = range(1, len(df) + 1)
         return df
 
     def _build_convergence_data(self) -> pd.DataFrame:
@@ -747,144 +728,86 @@ class Dashboard:
         history = self.results.get('history', [])
         return pd.DataFrame(history)
 
-    def _build_param_df(self) -> pd.DataFrame:
-        """Build parameter distribution DataFrame."""
-        return self.pareto_df.drop(
-            columns=['Area', 'Power', 'Delay', 'Solution ID'],
-            errors='ignore'
-        )
-
-    def _get_chart_template(self) -> go.Layout:
-        """Get Plotly layout template based on current theme."""
-        is_dark = self.current_theme == 'dark'
-        return {
-            'layout': {
-                'paper_bgcolor': 'transparent',
-                'plot_bgcolor': 'transparent',
-                'font': {
-                    'family': 'IBM Plex Sans, sans-serif',
-                    'size': 12,
-                    'color': '#64748b' if is_dark else '#495057',
-                },
-                'axis': {
-                    'gridcolor': '#2d3344' if is_dark else '#f1f3f5',
-                    'linecolor': '#374151' if is_dark else '#ced4da',
-                    'tickcolor': '#374151' if is_dark else '#ced4da',
-                },
-                'colorscale': {
-                    'sequential': [[0, '#3b82f6'], [1, '#1e3a5f'] if is_dark else ['#93c5fd', '#2563eb']],
-                },
-            }
-        }
-
     def _create_app(self) -> Dash:
         """Create and configure Dash application."""
         app = Dash(__name__)
         app.title = "SRAM DSO-MOGA Dashboard"
+        app.config.suppress_callback_exceptions = True
 
-        # Register callbacks before layout
         self._register_callbacks(app)
-
         app.layout = self._create_layout()
+
         return app
 
     def _create_layout(self) -> html.Div:
         """Create main dashboard layout."""
-        # For the interactive dashboard, CSS/JS are injected via external assets
-        # See assets/ folder for custom CSS/JS files
+        theme = EDATheme.get(self.current_theme)
+
         return html.Div([
             # Header
             self._create_header(),
 
             # Main content
             html.Div([
-                # Left sidebar
+                # Left sidebar - controls
                 self._create_sidebar(),
 
-                # Main content area with tabs
-                html.Div([
-                    dcc.Tabs(
-                        id='tabs',
-                        value='tab-overview',
-                        children=self._create_tabs(),
-                        className='main-tabs',
-                    ),
-                ], className='main-content'),
-
-                # Right summary panel
-                self._create_summary_panel(),
-            ], className='main-layout'),
-
-            # Hidden data store
-            dcc.Store(id='store-results', data=self._serialize_results()),
-            dcc.Store(id='store-theme', data=self.current_theme),
-        ], className='dashboard-container')
-
-    def _create_tabs(self) -> List[dcc.Tab]:
-        """Create tab components."""
-        tabs_config = [
-            ('tab-overview', 'Overview', self._create_overview_tab),
-            ('tab-3d', '3D Pareto', self._create_3d_tab),
-            ('tab-2d', '2D Projections', self._create_2d_tab),
-            ('tab-conv', 'Convergence', self._create_convergence_tab),
-            ('tab-params', 'Parameters', self._create_params_tab),
-            ('tab-solutions', 'Solutions', self._create_solutions_tab),
-        ]
-
-        return [
-            dcc.Tab(label=label, value=value, children=creator())
-            for value, label, creator in tabs_config
-        ]
+                # Right panel - visualizations
+                self._create_right_panel(),
+            ], className='main-content'),
+        ], className='app-container')
 
     def _create_header(self) -> html.Div:
         """Create header bar with logo, badges, and theme toggle."""
         top_name = self.config.get('top_name', 'SRAM DSO-MOGA')
         n_pareto = len(self.pareto_df)
+        algo_name = self.config.get('algorithm', {}).get('name', 'NSGA-II')
 
         return html.Div([
+            # Left: Logo and title
             html.Div([
-                html.Span('SRAM DSO-MOGA', className='logo'),
-                html.Span('Multi-Objective Genetic Algorithm', className='subtitle'),
+                html.Span('SRAM DSO-MOGA', className='header-logo'),
+                html.Span('Multi-Objective Genetic Algorithm', className='header-subtitle'),
             ], className='header-left'),
 
+            # Right: Status badges and theme toggle
             html.Div([
-                html.Div([
-                    html.Span(f'Design: {top_name}', className='header-badge'),
-                    html.Span(f'{n_pareto} Pareto Solutions', className='header-badge accent'),
-                ], className='header-badges'),
+                html.Span(f'Design: {top_name}', className='header-badge'),
+                html.Span(f'{n_pareto} Pareto', className='header-badge accent'),
+                html.Span(f'Algo: {algo_name}', className='header-badge'),
 
+                # Theme toggle
                 html.Div([
-                    html.Div([
-                        html.Button(
-                            '☀',
-                            className='theme-btn active',
-                            id='btn-light',
-                            title='Light Mode',
-                            n_clicks=0,
-                        ),
-                        html.Button(
-                            '☾',
-                            className='theme-btn',
-                            id='btn-dark',
-                            title='Dark Mode',
-                            n_clicks=0,
-                        ),
-                    ], className='theme-toggle'),
-                ], className='status-indicator'),
+                    html.Button('☀', className='theme-btn active', id='btn-light', title='Light Mode'),
+                    html.Button('☾', className='theme-btn', id='btn-dark', title='Dark Mode'),
+                ], className='theme-toggle'),
+
+                # Online indicator
+                html.Div([
+                    html.Span(className='status-dot'),
+                    html.Span('Ready', className='header-badge'),
+                ]),
             ], className='header-right'),
         ], className='header-bar')
 
     def _create_sidebar(self) -> html.Div:
         """Create left sidebar with controls."""
         return html.Div([
+            # Algorithm Settings
             html.Div([
-                html.Span('Configuration', className='section-title'),
+                html.Span('Algorithm Settings', className='sidebar-title'),
+            ], className='sidebar-section'),
+
+            html.Div([
                 html.Div([
                     html.Label('Population Size', className='form-label'),
                     dcc.Input(
                         id='input-pop-size', type='number',
                         value=self.config.get('algorithm', {}).get('pop_size', 80),
-                        className='input-field'
+                        className='form-select',
+                        style={'width': '100%', 'padding': '6px 10px', 'background': 'var(--bg-input)',
+                               'border': '1px solid var(--border-primary)', 'border-radius': '3px',
+                               'color': 'var(--text-primary)', 'fontSize': '12px'}
                     ),
                 ], className='form-group'),
                 html.Div([
@@ -892,7 +815,10 @@ class Dashboard:
                     dcc.Input(
                         id='input-n-gen', type='number',
                         value=self.config.get('algorithm', {}).get('n_gen', 60),
-                        className='input-field'
+                        className='form-select',
+                        style={'width': '100%', 'padding': '6px 10px', 'background': 'var(--bg-input)',
+                               'border': '1px solid var(--border-primary)', 'border-radius': '3px',
+                               'color': 'var(--text-primary)', 'fontSize': '12px'}
                     ),
                 ], className='form-group'),
                 html.Div([
@@ -904,22 +830,28 @@ class Dashboard:
                             {'label': 'NSGA-III', 'value': 'NSGA-III'},
                         ],
                         value=self.config.get('algorithm', {}).get('name', 'NSGA-II'),
-                        className='dropdown'
+                        className='form-select',
+                        style={'background': 'var(--bg-input)'}
                     ),
                 ], className='form-group'),
             ], className='sidebar-section'),
 
+            # Objective Filters
             html.Div([
-                html.Span('Objective Filters', className='section-title'),
+                html.Span('Objective Filters', className='sidebar-title'),
+            ], className='sidebar-section'),
+
+            html.Div([
                 html.Div([
                     html.Label('Area Range (um²)', className='form-label'),
                     dcc.RangeSlider(
                         id='slider-area',
                         min=0, max=100, step=1,
                         value=[0, 100],
-                        className='range-slider'
+                        className='range-slider-container',
+                        marks=None,
                     ),
-                    html.Div(id='slider-area-labels', className='slider-labels'),
+                    html.Div(id='slider-area-labels', className='range-labels'),
                 ], className='form-group'),
                 html.Div([
                     html.Label('Power Range (uW)', className='form-label'),
@@ -927,9 +859,10 @@ class Dashboard:
                         id='slider-power',
                         min=0, max=1000, step=10,
                         value=[0, 1000],
-                        className='range-slider'
+                        className='range-slider-container',
+                        marks=None,
                     ),
-                    html.Div(id='slider-power-labels', className='slider-labels'),
+                    html.Div(id='slider-power-labels', className='range-labels'),
                 ], className='form-group'),
                 html.Div([
                     html.Label('Delay Range (ps)', className='form-label'),
@@ -937,97 +870,115 @@ class Dashboard:
                         id='slider-delay',
                         min=0, max=1000, step=10,
                         value=[0, 1000],
-                        className='range-slider'
+                        className='range-slider-container',
+                        marks=None,
                     ),
-                    html.Div(id='slider-delay-labels', className='slider-labels'),
+                    html.Div(id='slider-delay-labels', className='range-labels'),
                 ], className='form-group'),
             ], className='sidebar-section'),
 
+            # Visualization Settings
             html.Div([
-                html.Span('Actions', className='section-title'),
+                html.Span('Visualization', className='sidebar-title'),
+            ], className='sidebar-section'),
+
+            html.Div([
                 html.Div([
-                    html.Button('Apply Filters', id='btn-apply', className='btn btn-primary'),
-                    html.Button('Reset', id='btn-reset', className='btn btn-secondary'),
-                ], className='btn-group'),
+                    html.Label('Chart Type', className='form-label'),
+                    dcc.Dropdown(
+                        id='input-chart-type',
+                        options=[
+                            {'label': '2D Scatter', 'value': '2d'},
+                            {'label': '3D Scatter', 'value': '3d'},
+                            {'label': 'Parallel Coordinates', 'value': 'parallel'},
+                        ],
+                        value='2d',
+                        className='form-select',
+                        style={'background': 'var(--bg-input)'}
+                    ),
+                ], className='form-group'),
+                html.Div([
+                    html.Label('Color By', className='form-label'),
+                    dcc.Dropdown(
+                        id='input-color-by',
+                        options=[
+                            {'label': 'Area', 'value': 'Area'},
+                            {'label': 'Power', 'value': 'Power'},
+                            {'label': 'Delay', 'value': 'Delay'},
+                        ],
+                        value='Delay',
+                        className='form-select',
+                        style={'background': 'var(--bg-input)'}
+                    ),
+                ], className='form-group'),
+            ], className='sidebar-section'),
+
+            # Stats Summary
+            html.Div([
+                html.Span('Summary', className='sidebar-title'),
+            ], className='sidebar-section'),
+
+            html.Div([
+                html.Div([html.Span('Total Solutions', className='form-label'),
+                         html.Span(f"{len(self.pareto_df)}", style={'fontFamily': 'var(--font-data)', 'fontSize': '18px', 'fontWeight': '700'})],
+                        style={'display': 'flex', 'flexDirection': 'column', 'gap': '2px'}),
             ], className='sidebar-section'),
         ], className='sidebar')
 
-    def _create_summary_panel(self) -> html.Div:
-        """Create right summary panel with key metrics."""
+    def _create_right_panel(self) -> html.Div:
+        """Create right panel with visualizations."""
         objectives = self.pareto_df[['Area', 'Power', 'Delay']]
 
-        # Calculate statistics
         stats = {
-            'area': {
-                'min': objectives['Area'].min() if len(objectives) else 0,
-                'mean': objectives['Area'].mean() if len(objectives) else 0,
-            },
-            'power': {
-                'min': objectives['Power'].min() if len(objectives) else 0,
-                'mean': objectives['Power'].mean() if len(objectives) else 0,
-            },
-            'delay': {
-                'min': objectives['Delay'].min() if len(objectives) else 0,
-                'mean': objectives['Delay'].mean() if len(objectives) else 0,
-            },
+            'area_min': objectives['Area'].min() if len(objectives) else 0,
+            'area_mean': objectives['Area'].mean() if len(objectives) else 0,
+            'power_min': objectives['Power'].min() if len(objectives) else 0,
+            'power_mean': objectives['Power'].mean() if len(objectives) else 0,
+            'delay_min': objectives['Delay'].min() if len(objectives) else 0,
+            'delay_mean': objectives['Delay'].mean() if len(objectives) else 0,
         }
 
         return html.Div([
-            html.Div('Pareto Summary', className='panel-header'),
+            # Top metrics bar
             html.Div([
-                # Best Area
                 html.Div([
                     html.Div('Best Area', className='metric-label'),
                     html.Div([
-                        html.Span(f"{stats['area']['min']:.3f}", className='metric-value'),
+                        html.Span(f"{stats['area_min']:.3f}", className='metric-value best'),
                         html.Span('um²', className='metric-unit'),
                     ]),
-                    html.Div(f'Mean: {stats["area"]["mean"]:.3f}', className='metric-subtext'),
+                    html.Div(f'Mean: {stats["area_mean"]:.3f}', className='metric-subtext'),
                 ], className='metric-card'),
-
-                # Best Power
                 html.Div([
                     html.Div('Best Power', className='metric-label'),
                     html.Div([
-                        html.Span(f"{stats['power']['min']:.2f}", className='metric-value'),
+                        html.Span(f"{stats['power_min']:.2f}", className='metric-value best'),
                         html.Span('uW', className='metric-unit'),
                     ]),
-                    html.Div(f'Mean: {stats["power"]["mean"]:.2f}', className='metric-subtext'),
+                    html.Div(f'Mean: {stats["power_mean"]:.2f}', className='metric-subtext'),
                 ], className='metric-card'),
-
-                # Best Delay
                 html.Div([
                     html.Div('Best Delay', className='metric-label'),
                     html.Div([
-                        html.Span(f"{stats['delay']['min']:.2f}", className='metric-value'),
+                        html.Span(f"{stats['delay_min']:.2f}", className='metric-value best'),
                         html.Span('ps', className='metric-unit'),
                     ]),
-                    html.Div(f'Mean: {stats["delay"]["mean"]:.2f}', className='metric-subtext'),
+                    html.Div(f'Mean: {stats["delay_mean"]:.2f}', className='metric-subtext'),
                 ], className='metric-card'),
+            ], className='metrics-grid'),
 
-                html.Hr(className='divider'),
-
-                # Total Solutions
-                html.Div([
-                    html.Div('Pareto Size', className='metric-label'),
-                    html.Div([
-                        html.Span(f"{len(self.pareto_df)}", className='metric-value'),
-                    ]),
-                    html.Div('Non-dominated solutions', className='metric-subtext'),
-                ], className='metric-card'),
-            ], className='panel-content'),
+            # Tabs for different views
+            dcc.Tabs(id='tabs', value='tab-overview', children=[
+                dcc.Tab(label='Overview', value='tab-overview', children=self._create_overview_tab()),
+                dcc.Tab(label='3D View', value='tab-3d', children=self._create_3d_tab()),
+                dcc.Tab(label='Convergence', value='tab-conv', children=self._create_convergence_tab()),
+                dcc.Tab(label='Solutions', value='tab-solutions', children=self._create_solutions_tab()),
+            ], className='tabs-container'),
         ], className='right-panel')
 
     def _create_overview_tab(self) -> html.Div:
-        """Create overview tab with summary charts."""
-        if len(self.pareto_df) == 0:
-            return html.Div([
-                html.Div('Optimization Results Summary', className='tab-header'),
-                html.Div([
-                    html.H3('No Pareto Solutions Found'),
-                    html.P('Run the optimization first to see results.'),
-                ], className='empty-state'),
-            ])
+        """Create overview tab with 2D scatter plots."""
+        obj = self.pareto_df[['Area', 'Power', 'Delay']].values
 
         fig = make_subplots(
             rows=1, cols=3,
@@ -1035,76 +986,62 @@ class Dashboard:
             horizontal_spacing=0.08,
         )
 
-        obj = self.pareto_df[['Area', 'Power', 'Delay']].values
-        colors = obj[:, 2]  # Use Delay for coloring
+        colors = obj[:, 2]  # Delay
 
         # Area vs Power
-        fig.add_trace(
-            go.Scatter(
-                x=obj[:, 0], y=obj[:, 1],
-                mode='markers',
-                marker=dict(size=8, color=colors, colorscale='Viridis', showscale=False),
-                hovertemplate='Area: %{x:.3f}<br>Power: %{y:.2f}<extra></extra>',
-            ),
-            row=1, col=1
-        )
+        fig.add_trace(go.Scatter(
+            x=obj[:, 0], y=obj[:, 1],
+            mode='markers',
+            marker=dict(size=8, color=colors, colorscale='Viridis', showscale=False,
+                      line=dict(width=0.5, color='rgba(255,255,255,0.3)')),
+            hovertemplate='Area: %{x:.3f}<br>Power: %{y:.2f}<extra></extra>',
+        ), row=1, col=1)
 
         # Area vs Delay
-        fig.add_trace(
-            go.Scatter(
-                x=obj[:, 0], y=obj[:, 2],
-                mode='markers',
-                marker=dict(size=8, color=colors, colorscale='Viridis', showscale=False),
-                hovertemplate='Area: %{x:.3f}<br>Delay: %{y:.2f}<extra></extra>',
-            ),
-            row=1, col=2
-        )
+        fig.add_trace(go.Scatter(
+            x=obj[:, 0], y=obj[:, 2],
+            mode='markers',
+            marker=dict(size=8, color=colors, colorscale='Viridis', showscale=False,
+                      line=dict(width=0.5, color='rgba(255,255,255,0.3)')),
+            hovertemplate='Area: %{x:.3f}<br>Delay: %{y:.2f}<extra></extra>',
+        ), row=1, col=2)
 
         # Power vs Delay
-        fig.add_trace(
-            go.Scatter(
-                x=obj[:, 1], y=obj[:, 2],
-                mode='markers',
-                marker=dict(size=8, color=obj[:, 0], colorscale='Plasma', showscale=False),
-                hovertemplate='Power: %{x:.2f}<br>Delay: %{y:.2f}<extra></extra>',
-            ),
-            row=1, col=3
-        )
+        fig.add_trace(go.Scatter(
+            x=obj[:, 1], y=obj[:, 2],
+            mode='markers',
+            marker=dict(size=8, color=obj[:, 0], colorscale='Plasma', showscale=False,
+                      line=dict(width=0.5, color='rgba(255,255,255,0.3)')),
+            hovertemplate='Power: %{x:.2f}<br>Delay: %{y:.2f}<extra></extra>',
+        ), row=1, col=3)
 
         fig.update_layout(
             title='Pareto Front Overview',
-            height=380,
+            height=400,
             showlegend=False,
-            title_font_size=14,
+            title_font_size=13,
             title_x=0.5,
+            paper_bgcolor='var(--graph-bg)',
+            plot_bgcolor='var(--graph-bg)',
             margin=dict(l=40, r=40, t=50, b=40),
         )
 
-        # Update axes
         for i in range(1, 4):
-            fig.update_xaxes(title_text=['Area (um²)', 'Area (um²)', 'Power (uW)'][i-1], row=1, col=i)
-            fig.update_yaxes(title_text=['Power (uW)', 'Delay (ps)', 'Delay (ps)'][i-1], row=1, col=i)
+            fig.update_xaxes(title_text=['Area (um²)', 'Area (um²)', 'Power (uW)'][i-1],
+                          gridcolor='var(--border-secondary)', row=1, col=i)
+            fig.update_yaxes(title_text=['Power (uW)', 'Delay (ps)', 'Delay (ps)'][i-1],
+                          gridcolor='var(--border-secondary)', row=1, col=i)
 
         return html.Div([
-            html.Div([
-                html.H3('Optimization Results Summary'),
-                html.P(f'Found {len(self.pareto_df)} Pareto-optimal solutions across 3 objectives'),
-            ], className='tab-header'),
-            html.Div(go.Figure(fig), className='chart-container'),
-            self._create_quick_stats(),
+            dcc.Graph(figure=fig, className='chart-container'),
         ])
 
     def _create_3d_tab(self) -> html.Div:
-        """Create 3D Pareto visualization tab."""
-        if len(self.pareto_df) == 0:
-            return html.Div([html.Div('No data available', className='empty-state')])
-
+        """Create 3D visualization tab."""
         obj = self.pareto_df[['Area', 'Power', 'Delay']].values
 
         fig = go.Figure(data=[go.Scatter3d(
-            x=obj[:, 0],
-            y=obj[:, 1],
-            z=obj[:, 2],
+            x=obj[:, 0], y=obj[:, 1], z=obj[:, 2],
             mode='markers',
             marker=dict(
                 size=6,
@@ -1119,108 +1056,23 @@ class Dashboard:
         )])
 
         fig.update_layout(
-            title='3D Pareto Front Visualization',
+            title='3D Pareto Front',
             scene=dict(
                 xaxis_title='Area (um²)',
                 yaxis_title='Power (uW)',
                 zaxis_title='Delay (ps)',
-                xaxis=dict(backgroundcolor='rgba(0,0,0,0)', gridcolor='#2d3344'),
-                yaxis=dict(backgroundcolor='rgba(0,0,0,0)', gridcolor='#2d3344'),
-                zaxis=dict(backgroundcolor='rgba(0,0,0,0)', gridcolor='#2d3344'),
+                xaxis=dict(backgroundcolor='var(--graph-bg)', gridcolor='var(--border-secondary)'),
+                yaxis=dict(backgroundcolor='var(--graph-bg)', gridcolor='var(--border-secondary)'),
+                zaxis=dict(backgroundcolor='var(--graph-bg)', gridcolor='var(--border-secondary)'),
             ),
-            height=600,
+            height=550,
+            paper_bgcolor='var(--graph-bg)',
             margin=dict(l=0, r=0, t=50, b=0),
-            title_font_size=14,
-            title_x=0.5,
-        )
-
-        return html.Div([
-            dcc.Graph(figure=fig, className='chart-container-full'),
-        ])
-
-    def _create_2d_tab(self) -> html.Div:
-        """Create 2D projection charts."""
-        if len(self.pareto_df) == 0:
-            return html.Div([html.Div('No data available', className='empty-state')])
-
-        obj = self.pareto_df[['Area', 'Power', 'Delay']].values
-
-        fig = make_subplots(
-            rows=2, cols=3,
-            subplot_titles=['', '', '', '', '', ''],
-            horizontal_spacing=0.1,
-            vertical_spacing=0.12,
-        )
-
-        # Row 1: Objective pairs
-        fig.add_trace(
-            go.Scatter(x=obj[:, 0], y=obj[:, 1], mode='markers',
-                      marker=dict(color=obj[:, 2], colorscale='Viridis', size=7),
-                      hovertemplate='Area: %{x:.3f}<br>Power: %{y:.2f}<extra></extra>'),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=obj[:, 0], y=obj[:, 2], mode='markers',
-                      marker=dict(color=obj[:, 1], colorscale='Plasma', size=7),
-                      hovertemplate='Area: %{x:.3f}<br>Delay: %{y:.2f}<extra></extra>'),
-            row=1, col=2
-        )
-        fig.add_trace(
-            go.Scatter(x=obj[:, 1], y=obj[:, 2], mode='markers',
-                      marker=dict(color=obj[:, 0], colorscale='Cividis', size=7),
-                      hovertemplate='Power: %{x:.2f}<br>Delay: %{y:.2f}<extra></extra>'),
-            row=1, col=3
-        )
-
-        # Row 2: Parallel coordinates style (normalized)
-        obj_norm = (obj - obj.min(axis=0)) / (obj.max(axis=0) - obj.min(axis=0) + 1e-10)
-        n_points = len(obj)
-
-        fig.add_trace(
-            go.Scatter(x=obj_norm[:, 0], y=obj_norm[:, 1], mode='markers',
-                      marker=dict(color=list(range(n_points)), colorscale='Viridis', size=7),
-                      showlegend=False),
-            row=2, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=obj_norm[:, 0], y=obj_norm[:, 2], mode='markers',
-                      marker=dict(color=list(range(n_points)), colorscale='Viridis', size=7),
-                      showlegend=False),
-            row=2, col=2
-        )
-        fig.add_trace(
-            go.Scatter(x=obj_norm[:, 1], y=obj_norm[:, 2], mode='markers',
-                      marker=dict(color=list(range(n_points)), colorscale='Viridis', size=7),
-                      showlegend=False),
-            row=2, col=3
-        )
-
-        # Add axis labels
-        fig.update_xaxes(title_text='Area', row=1, col=1)
-        fig.update_yaxes(title_text='Power', row=1, col=1)
-        fig.update_xaxes(title_text='Area', row=1, col=2)
-        fig.update_yaxes(title_text='Delay', row=1, col=2)
-        fig.update_xaxes(title_text='Power', row=1, col=3)
-        fig.update_yaxes(title_text='Delay', row=1, col=3)
-
-        # Normalized axis labels
-        fig.update_xaxes(title_text='Area (norm)', row=2, col=1)
-        fig.update_yaxes(title_text='Power (norm)', row=2, col=1)
-        fig.update_xaxes(title_text='Area (norm)', row=2, col=2)
-        fig.update_yaxes(title_text='Delay (norm)', row=2, col=2)
-        fig.update_xaxes(title_text='Power (norm)', row=2, col=3)
-        fig.update_yaxes(title_text='Delay (norm)', row=2, col=3)
-
-        fig.update_layout(
-            title='2D Objective Projections (Top: Raw, Bottom: Normalized)',
-            height=650,
-            showlegend=False,
             title_font_size=13,
             title_x=0.5,
-            margin=dict(l=40, r=40, t=50, b=40),
         )
 
-        return html.Div([dcc.Graph(figure=fig)])
+        return html.Div([dcc.Graph(figure=fig, className='chart-container')])
 
     def _create_convergence_tab(self) -> html.Div:
         """Create convergence analysis tab."""
@@ -1231,124 +1083,51 @@ class Dashboard:
 
         fig = make_subplots(
             rows=2, cols=1,
-            subplot_titles=['Pareto Front Size per Generation', 'Average Fitness per Generation'],
+            subplot_titles=['Pareto Front Size', 'Average Fitness'],
             vertical_spacing=0.15,
         )
 
         # Front 0 size
-        fig.add_trace(
-            go.Scatter(
-                x=conv_df['gen'],
-                y=conv_df.get('front0_size', [0]*len(conv_df)),
-                mode='lines+markers',
-                name='Front 0 Size',
-                line=dict(color='#3b82f6', width=2),
-                marker=dict(size=6),
-            ),
-            row=1, col=1
-        )
+        fig.add_trace(go.Scatter(
+            x=conv_df['gen'],
+            y=conv_df.get('front0_size', [0]*len(conv_df)),
+            mode='lines+markers',
+            name='Front 0',
+            line=dict(color='#3fb950', width=2),
+            marker=dict(size=6),
+        ), row=1, col=1)
 
-        # Average fitness if available
+        # Average fitness
         if 'avg_fitness' in conv_df.columns:
             avg_fit = conv_df['avg_fitness'].tolist()
             if avg_fit and isinstance(avg_fit[0], list):
-                # Multi-objective: plot each objective
                 obj_labels = ['Area', 'Power', 'Delay']
-                colors = ['#3b82f6', '#22c55e', '#f59e0b']
+                colors = ['#58a6ff', '#3fb950', '#f0883e']
                 for i, (label, color) in enumerate(zip(obj_labels, colors)):
-                    fig.add_trace(
-                        go.Scatter(
-                            x=conv_df['gen'],
-                            y=[f[i] if len(f) > i else 0 for f in avg_fit],
-                            mode='lines',
-                            name=f'Avg {label}',
-                            line=dict(color=color, width=1.5, dash='dash'),
-                        ),
-                        row=2, col=1
-                    )
-            else:
-                fig.add_trace(
-                    go.Scatter(
+                    fig.add_trace(go.Scatter(
                         x=conv_df['gen'],
-                        y=avg_fit,
-                        mode='lines+markers',
-                        name='Avg Fitness',
-                        line=dict(color='#22c55e', width=2),
-                    ),
-                    row=2, col=1
-                )
+                        y=[f[i] if len(f) > i else 0 for f in avg_fit],
+                        mode='lines',
+                        name=f'Avg {label}',
+                        line=dict(color=color, width=1.5, dash='dash'),
+                    ), row=2, col=1)
 
         fig.update_layout(
-            height=500,
+            height=450,
             showlegend=True,
             legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            paper_bgcolor='var(--graph-bg)',
+            plot_bgcolor='var(--graph-bg)',
             title_font_size=13,
             title_x=0.5,
             margin=dict(l=50, r=50, t=50, b=40),
         )
 
-        return html.Div([
-            dcc.Graph(figure=fig),
-            html.Div([
-                html.H4('Convergence Analysis'),
-                html.P('The Pareto front size should stabilize as the algorithm converges to the optimal set of non-dominated solutions. The average fitness trends indicate how each objective evolves across generations.'),
-            ], className='analysis-text'),
-        ])
-
-    def _create_params_tab(self) -> html.Div:
-        """Create parameter distribution tab."""
-        param_cols = [c for c in self.param_df.columns if c and c not in ['Area', 'Power', 'Delay', 'Solution ID']]
-
-        if not param_cols:
-            return html.Div([html.Div('No parameter data available', className='empty-state')])
-
-        n_params = len(param_cols)
-        n_rows = (n_params + 2) // 3
-
-        fig = make_subplots(
-            rows=n_rows, cols=3,
-            subplot_titles=param_cols[:12],  # Limit to 12 for readability
-            vertical_spacing=0.2,
-            horizontal_spacing=0.1,
-        )
-
-        colors = px.colors.qualitative.Set2
-
-        for i, col in enumerate(param_cols[:12]):
-            row = i // 3 + 1
-            col_idx = i % 3 + 1
-
-            # Get unique values and counts
-            vals = self.param_df[col].astype(str)
-            val_counts = vals.value_counts()
-
-            fig.add_trace(
-                go.Bar(
-                    x=val_counts.index,
-                    y=val_counts.values,
-                    marker_color=colors[i % len(colors)],
-                    hovertemplate=f'{col}: %{{x}}<br>Count: %{{y}}<extra></extra>',
-                ),
-                row=row, col=col_idx
-            )
-
-        fig.update_layout(
-            title=f'Parameter Distributions ({len(param_cols)} parameters)',
-            height=max(300, 120 * n_rows),
-            showlegend=False,
-            title_font_size=13,
-            title_x=0.5,
-            margin=dict(l=40, r=40, t=50, b=40),
-        )
-
-        return html.Div([dcc.Graph(figure=fig)])
+        return html.Div([dcc.Graph(figure=fig, className='chart-container')])
 
     def _create_solutions_tab(self) -> html.Div:
         """Create solutions table tab."""
         display_df = self.pareto_df.copy()
-        display_df['ID'] = range(1, len(display_df) + 1)
-
-        # Reorder columns
         cols = ['ID'] + [c for c in display_df.columns if c != 'ID']
         display_df = display_df[cols]
 
@@ -1361,71 +1140,28 @@ class Dashboard:
                 filter_action='native',
                 style_cell={
                     'textAlign': 'left',
-                    'fontFamily': "'IBM Plex Mono', monospace",
+                    'fontFamily': 'var(--font-data)',
                     'fontSize': '12px',
                     'padding': '8px 12px',
+                    'backgroundColor': 'var(--bg-secondary)',
+                    'color': 'var(--text-primary)',
                 },
                 style_header={
                     'backgroundColor': 'var(--bg-tertiary)',
                     'fontWeight': '600',
                     'textTransform': 'uppercase',
-                    'fontSize': '11px',
-                    'letterSpacing': '0.5px',
+                    'fontSize': '10px',
+                    'letterSpacing': '0.05em',
                 },
                 style_data_conditional=[
-                    {'if': {'row_index': 'odd'}, 'backgroundColor': 'var(--bg-secondary)'},
-                    {'if': {'filter_query': '{ID} <= 5'}, 'backgroundColor': 'var(--accent-light)'},
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': 'var(--bg-primary)'},
                 ],
-                style_table={
-                    'overflowX': 'auto',
-                    'maxHeight': '600px',
-                },
+                style_table={'overflowX': 'auto'},
             ),
-        ], className='data-table-container')
-
-    def _create_quick_stats(self) -> html.Div:
-        """Create quick statistics section."""
-        obj = self.pareto_df[['Area', 'Power', 'Delay']]
-
-        return html.Div([
-            html.Div('Quick Statistics', className='section-title'),
-            html.Div([
-                html.Div([
-                    html.Span('Mean Area:', className='stat-label'),
-                    html.Span(f"{obj['Area'].mean():.3f} um²", className='stat-value'),
-                ], className='stat-card'),
-                html.Div([
-                    html.Span('Mean Power:', className='stat-label'),
-                    html.Span(f"{obj['Power'].mean():.2f} uW", className='stat-value'),
-                ], className='stat-card'),
-                html.Div([
-                    html.Span('Mean Delay:', className='stat-label'),
-                    html.Span(f"{obj['Delay'].mean():.2f} ps", className='stat-value'),
-                ], className='stat-card'),
-                html.Div([
-                    html.Span('Std Area:', className='stat-label'),
-                    html.Span(f"{obj['Area'].std():.3f}", className='stat-value'),
-                ], className='stat-card'),
-            ], className='stats-grid'),
-        ])
-
-    def _serialize_results(self) -> dict:
-        """Serialize results for Dash store."""
-        return {
-            'pareto_solutions': self.results.get('pareto_solutions', []),
-            'pareto_objectives': self.results.get('pareto_objectives', []),
-            'history': self.results.get('history', []),
-        }
+        ], className='data-table-wrapper')
 
     def _register_callbacks(self, app: Dash) -> None:
         """Register Dash callbacks."""
-
-        @app.callback(
-            Output('tabs', 'value'),
-            [Input('btn-reset', 'n_clicks')]
-        )
-        def reset_filters(n_clicks):
-            return 'tab-overview'
 
         @app.callback(
             [Output('slider-area-labels', 'children'),
@@ -1449,47 +1185,36 @@ class Dashboard:
     def save_html(self, path: Optional[Path] = None) -> Path:
         """Export dashboard as standalone HTML."""
         path = path or self.output_dir / 'dashboard.html'
-
         obj = self.pareto_df[['Area', 'Power', 'Delay']].values
 
         fig = make_subplots(
-            rows=2, cols=3,
+            rows=2, cols=2,
             specs=[
-                [{'type': 'scatter3d'}, None, None],
-                [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}]
+                [{'type': 'scatter3d'}, {'type': 'scatter'}],
+                [{'type': 'scatter'}, {'type': 'scatter'}]
             ],
-            subplot_titles=['3D Pareto Front', 'Area vs Power', 'Area vs Delay', '', 'Power vs Delay', ''],
-            vertical_spacing=0.15,
+            subplot_titles=['3D Pareto', 'Area vs Power', 'Area vs Delay', 'Power vs Delay'],
+            vertical_spacing=0.12,
             horizontal_spacing=0.1,
         )
 
-        fig.add_trace(
-            go.Scatter3d(
-                x=obj[:, 0], y=obj[:, 1], z=obj[:, 2],
-                mode='markers',
-                marker=dict(size=5, color=obj[:, 2], colorscale='Viridis'),
-            ),
-            row=1, col=1
-        )
+        fig.add_trace(go.Scatter3d(
+            x=obj[:, 0], y=obj[:, 1], z=obj[:, 2],
+            mode='markers',
+            marker=dict(size=5, color=obj[:, 2], colorscale='Viridis'),
+        ), row=1, col=1)
 
-        fig.add_trace(go.Scatter(x=obj[:, 0], y=obj[:, 1], mode='markers'), row=2, col=1)
-        fig.add_trace(go.Scatter(x=obj[:, 0], y=obj[:, 2], mode='markers'), row=2, col=2)
-        fig.add_trace(go.Scatter(x=obj[:, 1], y=obj[:, 2], mode='markers'), row=2, col=3)
+        fig.add_trace(go.Scatter(x=obj[:, 0], y=obj[:, 1], mode='markers'), row=1, col=2)
+        fig.add_trace(go.Scatter(x=obj[:, 0], y=obj[:, 2], mode='markers'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=obj[:, 1], y=obj[:, 2], mode='markers'), row=2, col=2)
 
         fig.update_layout(
             title='SRAM DSO-MOGA Results',
-            height=800,
+            height=700,
             showlegend=False,
-            paper_bgcolor='#1a1f2e',
-            plot_bgcolor='#1a1f2e',
-            font=dict(color='#94a3b8'),
         )
 
-        fig.write_html(
-            str(path),
-            include_plotlyjs='cdn',
-            full_html=True,
-        )
+        fig.write_html(str(path), include_plotlyjs='cdn', full_html=True)
         return path
 
 
