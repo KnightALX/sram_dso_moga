@@ -36,6 +36,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from config import Config, load_config
@@ -616,46 +618,137 @@ def run_stage(stage: int, config: Config, stage_mgr: StageManager,
     return results
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='SRAM DSO-MOGA: Two-Phase Optimization with Simulation',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument('--config', '-c', required=True, help='YAML configuration file')
-    parser.add_argument('--output-dir', '-o', default='./results', help='Output directory')
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with subcommands."""
 
-    # Stage control
-    stage_group = parser.add_mutually_exclusive_group()
+    # Main parser
+    parser = argparse.ArgumentParser(
+        description='SRAM DSO-MOGA: Two-Phase Multi-Objective Genetic Algorithm Optimization',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run both stages (default)
+  python run_moga.py run --config config.yaml
+
+  # Run Stage 1 only (coarse search)
+  python run_moga.py run --config config.yaml --stage 1
+
+  # Run Stage 2 only (fine search, requires Stage 1 results)
+  python run_moga.py run --config config.yaml --stage 2
+
+  # Override algorithm parameters
+  python run_moga.py run --config config.yaml --pop-size 100 --n-gen 80
+
+  # Override sampling parameters
+  python run_moga.py run --config config.yaml --coarse-samples 300 --fine-samples 20
+
+  # Save log to file
+  python run_moga.py run --config config.yaml --log
+        """
+    )
+
+    # Global arguments (available for all subcommands)
+    parser.add_argument('--config', '-c', required=True,
+                       help='YAML configuration file')
+    parser.add_argument('--output-dir', '-o', default='./results',
+                       help='Output directory (default: ./results)')
+    parser.add_argument('--log', action='store_true',
+                       help='Save log to file')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Verbose logging (DEBUG level)')
+
+    # Subparsers
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # =================================================================
+    # 'run' subcommand - Execute optimization
+    # =================================================================
+    parser_run = subparsers.add_parser('run',
+        help='Run optimization (Stage 1, Stage 2, or both)',
+        description='Execute the two-phase MOGA optimization workflow')
+
+    # Stage selection
+    stage_group = parser_run.add_mutually_exclusive_group()
     stage_group.add_argument('--stage', type=int, choices=[1, 2],
-                           help='Run specific stage only (1=coarse, 2=fine)')
+                            help='Run specific stage only (1=coarse, 2=fine)')
     stage_group.add_argument('--both', action='store_true',
-                           help='Run both stages sequentially')
+                            help='Run both stages sequentially')
 
     # Sampling parameters
-    parser.add_argument('--coarse-samples', type=int,
-                       help='Number of samples for coarse search (Stage 1)')
-    parser.add_argument('--fine-samples', type=int,
-                       help='Number of fine samples per Pareto solution (Stage 2)')
-    parser.add_argument('--variation', type=float, default=0.2,
-                       help='Parameter variation fraction for fine search (default: 0.2 = +/-20%%)')
+    parser_run.add_argument('--coarse-samples', type=int,
+                           help='Number of samples for coarse search (Stage 1)')
+    parser_run.add_argument('--fine-samples', type=int,
+                           help='Number of fine samples per Pareto solution (Stage 2)')
+    parser_run.add_argument('--variation', type=float, default=0.2,
+                           help='Parameter variation fraction for fine search (default: 0.2 = +/-20%%)')
 
-    # Polling parameters
-    parser.add_argument('--poll-interval', type=int, default=60,
-                       help='Simulation polling interval in seconds')
-    parser.add_argument('--poll-timeout', type=int, default=7200,
-                       help='Simulation polling timeout in seconds')
+    # Simulation/HPC parameters
+    parser_run.add_argument('--poll-interval', type=int, default=60,
+                           help='Simulation polling interval in seconds (default: 60)')
+    parser_run.add_argument('--poll-timeout', type=int, default=7200,
+                           help='Simulation polling timeout in seconds (default: 7200)')
 
-    # Algorithm overrides
-    parser.add_argument('--pop-size', type=int, help='Population size')
-    parser.add_argument('--n-gen', type=int, help='Number of generations')
-    parser.add_argument('--seed', type=int, help='Random seed')
+    # Algorithm parameters
+    algo_group = parser_run.add_argument_group('algorithm',
+        'Algorithm hyperparameters (override config file)')
+    algo_group.add_argument('--pop-size', type=int,
+                            help='Population size')
+    algo_group.add_argument('--n-gen', type=int,
+                            help='Number of generations')
+    algo_group.add_argument('--seed', type=int,
+                            help='Random seed for reproducibility')
 
-    # Logging
-    parser.add_argument('--log', action='store_true', help='Save log to file')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
+    parser_run.set_defaults(func=_handle_run)
 
-    args = parser.parse_args()
+    # =================================================================
+    # 'resume' subcommand - Resume from checkpoint
+    # =================================================================
+    parser_resume = subparsers.add_parser('resume',
+        help='Resume optimization from checkpoint',
+        description='Resume a crashed or interrupted optimization from the latest checkpoint')
 
+    parser_resume.add_argument('--stage', type=int, choices=[1, 2], required=True,
+                              help='Stage to resume (1 or 2)')
+    parser_resume.add_argument('--gen', type=int,
+                              help='Generation to resume from (default: latest)')
+
+    parser_resume.set_defaults(func=_handle_resume)
+
+    # =================================================================
+    # 'export' subcommand - Export results
+    # =================================================================
+    parser_export = subparsers.add_parser('export',
+        help='Export results to various formats',
+        description='Export optimization results to JSON, CSV, or HTML dashboard')
+
+    parser_export.add_argument('--results-dir', '-r', default='./results',
+                              help='Results directory (default: ./results)')
+    parser_export.add_argument('--stage', type=int, choices=[1, 2], default=2,
+                              help='Which stage results to export (default: 2)')
+    parser_export.add_argument('--format', '-f', nargs='+',
+                              choices=['json', 'csv', 'html', 'all'],
+                              default=['all'],
+                              help='Export format(s)')
+
+    parser_export.set_defaults(func=_handle_export)
+
+    # =================================================================
+    # 'info' subcommand - Show configuration info
+    # =================================================================
+    parser_info = subparsers.add_parser('info',
+        help='Show configuration and design space info',
+        description='Display configuration summary and design space statistics')
+
+    parser_info.add_argument('--show-tunables', action='store_true',
+                             help='Show all tunable parameters and their options')
+
+    parser_info.set_defaults(func=_handle_info)
+
+    return parser
+
+
+def _handle_run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Handle the 'run' subcommand."""
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     output_dir = Path(args.output_dir)
@@ -725,6 +818,146 @@ def main():
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         sys.exit(1)
+
+
+def _handle_resume(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Handle the 'resume' subcommand."""
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    output_dir = Path(args.output_dir)
+    stage_mgr = StageManager(output_dir)
+    logger = setup_logging(
+        output_dir / 'moga.log' if args.log else None,
+        log_level
+    )
+
+    # Find checkpoint to resume from
+    if args.gen:
+        gen_to_resume = args.gen
+    else:
+        gen_to_resume = stage_mgr.get_latest_population_gen(args.stage)
+
+    if gen_to_resume is None:
+        logger.error(f"No checkpoint found for Stage {args.stage}")
+        logger.error("Run 'python run_moga.py run --config config.yaml --stage 1' first")
+        sys.exit(1)
+
+    logger.info(f"Found checkpoint: Stage {args.stage}, Generation {gen_to_resume}")
+
+    # Load checkpoint
+    checkpoint_data = stage_mgr.load_population_checkpoint(args.stage, gen_to_resume)
+    if checkpoint_data:
+        loaded_gen, population = checkpoint_data
+        logger.info(f"Loaded {len(population)} individuals from generation {loaded_gen}")
+
+    # TODO: Implement full resume logic
+    # - Load config
+    # - Set start_step to resume generation
+    # - Continue NSGA evolution from checkpoint
+    logger.warning("Full resume functionality is under development")
+    logger.info("For now, you can re-run with the same config and --stage to start fresh")
+
+
+def _handle_export(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Handle the 'export' subcommand."""
+    results_dir = Path(args.results_dir)
+    stage_dir = results_dir / f'stage{args.stage}'
+
+    results_file = stage_dir / 'results.json'
+    if not results_file.exists():
+        print(f"Error: Results not found at {results_file}")
+        print(f"Run 'python run_moga.py run --config config.yaml --stage {args.stage}' first")
+        sys.exit(1)
+
+    with open(results_file, 'r', encoding='utf-8') as f:
+        results = json.load(f)
+
+    # Import here to avoid circular imports
+    from src.dashboard import create_dashboard
+    from src.config import load_config
+
+    config = load_config(args.config)
+
+    formats = args.format if args.format != ['all'] else ['json', 'csv', 'html']
+
+    if 'json' in formats:
+        print(f"JSON already exists: {results_file}")
+
+    if 'csv' in formats:
+        csv_path = stage_dir / 'pareto_solutions.csv'
+        if csv_path.exists():
+            print(f"CSV already exists: {csv_path}")
+
+    if 'html' in formats:
+        # Create static dashboard HTML
+        try:
+            dash = create_dashboard(results, config.to_dict(), stage_dir)
+            html_path = dash.save_html(stage_dir / 'dashboard.html')
+            print(f"HTML dashboard exported: {html_path}")
+        except Exception as e:
+            print(f"Warning: Could not export HTML dashboard: {e}")
+
+    print(f"\nExport complete for Stage {args.stage} results")
+
+
+def _handle_info(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Handle the 'info' subcommand."""
+    try:
+        config = load_config(args.config)
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        sys.exit(1)
+
+    print("\n" + "=" * 60)
+    print("SRAM DSO-MOGA Configuration Info")
+    print("=" * 60)
+
+    # Basic info
+    cfg_dict = config.to_dict()
+    print(f"\nDesign: {cfg_dict.get('top_name', 'Unknown')}")
+    print(f"Algorithm: {cfg_dict.get('algorithm', {}).get('name', 'NSGA-II')}")
+
+    # Algorithm settings
+    algo = cfg_dict.get('algorithm', {})
+    print(f"\nAlgorithm Settings:")
+    print(f"  Population Size: {algo.get('pop_size', 80)}")
+    print(f"  Generations: {algo.get('n_gen', 60)}")
+    print(f"  Seed: {algo.get('seed', 42)}")
+    print(f"  Crossover Prob: {algo.get('crossover', {}).get('prob', 0.9)}")
+    print(f"  Mutation Prob: {algo.get('mutation', {}).get('prob', 0.15)}")
+
+    # Sampling settings
+    sampling = cfg_dict.get('sampling', {})
+    print(f"\nSampling Settings:")
+    print(f"  Coarse Samples: {sampling.get('coarse_samples', 200)}")
+    print(f"  Fine Samples Per Solution: {sampling.get('fine_samples_per_solution', 10)}")
+    print(f"  Parameter Variation: {sampling.get('parameter_variation', 0.2) * 100}%")
+
+    # Design space
+    tunables = config.get_tunables()
+    total_combos = config.get_total_combinations()
+    print(f"\nDesign Space:")
+    print(f"  Tunable Parameters: {len(tunables)}")
+    print(f"  Total Combinations: {total_combos:,}")
+
+    if args.show_tunables:
+        print(f"\nTunable Parameters:")
+        for name, options in tunables:
+            print(f"  {name}: {len(options)} options -> {options}")
+
+
+def main():
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if not hasattr(args, 'func'):
+        parser.print_help()
+        sys.exit(1)
+
+    args.func(args, parser)
+
+
+if __name__ == '__main__':
+    main()
 
 
 if __name__ == '__main__':
