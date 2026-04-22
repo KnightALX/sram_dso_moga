@@ -621,9 +621,29 @@ def run_stage(stage: int, config: Config, stage_mgr: StageManager,
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with subcommands."""
 
-    # Main parser
+    # Main parser (just dispatches to subcommands)
     parser = argparse.ArgumentParser(
         description='SRAM DSO-MOGA: Two-Phase Multi-Objective Genetic Algorithm Optimization',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Subparsers
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # =================================================================
+    # Common arguments (used by multiple subcommands)
+    # =================================================================
+    def add_config_arg(p: argparse.ArgumentParser, required=True):
+        p.add_argument('--config', '-c',
+                     required=required,
+                     help='YAML configuration file')
+
+    # =================================================================
+    # 'run' subcommand - Execute optimization
+    # =================================================================
+    parser_run = subparsers.add_parser('run',
+        help='Run optimization (Stage 1, Stage 2, or both)',
+        description='Execute the two-phase MOGA optimization workflow',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -647,25 +667,14 @@ Examples:
         """
     )
 
-    # Global arguments (available for all subcommands)
-    parser.add_argument('--config', '-c', required=True,
-                       help='YAML configuration file')
-    parser.add_argument('--output-dir', '-o', default='./results',
-                       help='Output directory (default: ./results)')
-    parser.add_argument('--log', action='store_true',
-                       help='Save log to file')
-    parser.add_argument('--verbose', '-v', action='store_true',
-                       help='Verbose logging (DEBUG level)')
-
-    # Subparsers
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
-
-    # =================================================================
-    # 'run' subcommand - Execute optimization
-    # =================================================================
-    parser_run = subparsers.add_parser('run',
-        help='Run optimization (Stage 1, Stage 2, or both)',
-        description='Execute the two-phase MOGA optimization workflow')
+    # Common args for run
+    add_config_arg(parser_run)
+    parser_run.add_argument('--output-dir', '-o', default='./results',
+                          help='Output directory (default: ./results)')
+    parser_run.add_argument('--log', action='store_true',
+                          help='Save log to file')
+    parser_run.add_argument('--verbose', '-v', action='store_true',
+                          help='Verbose logging (DEBUG level)')
 
     # Stage selection
     stage_group = parser_run.add_mutually_exclusive_group()
@@ -707,6 +716,13 @@ Examples:
         help='Resume optimization from checkpoint',
         description='Resume a crashed or interrupted optimization from the latest checkpoint')
 
+    add_config_arg(parser_resume)
+    parser_resume.add_argument('--output-dir', '-o', default='./results',
+                              help='Output directory (default: ./results)')
+    parser_resume.add_argument('--log', action='store_true',
+                              help='Save log to file')
+    parser_resume.add_argument('--verbose', '-v', action='store_true',
+                              help='Verbose logging (DEBUG level)')
     parser_resume.add_argument('--stage', type=int, choices=[1, 2], required=True,
                               help='Stage to resume (1 or 2)')
     parser_resume.add_argument('--gen', type=int,
@@ -721,6 +737,7 @@ Examples:
         help='Export results to various formats',
         description='Export optimization results to JSON, CSV, or HTML dashboard')
 
+    add_config_arg(parser_export)
     parser_export.add_argument('--results-dir', '-r', default='./results',
                               help='Results directory (default: ./results)')
     parser_export.add_argument('--stage', type=int, choices=[1, 2], default=2,
@@ -739,6 +756,7 @@ Examples:
         help='Show configuration and design space info',
         description='Display configuration summary and design space statistics')
 
+    add_config_arg(parser_info)
     parser_info.add_argument('--show-tunables', action='store_true',
                              help='Show all tunable parameters and their options')
 
