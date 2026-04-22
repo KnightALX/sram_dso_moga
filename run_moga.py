@@ -750,6 +750,40 @@ Examples:
     parser_export.set_defaults(func=_handle_export)
 
     # =================================================================
+    # 'dashboard' subcommand - Launch interactive dashboard
+    # =================================================================
+    parser_dash = subparsers.add_parser('dashboard',
+        help='Launch interactive dashboard server',
+        description='Start an interactive Plotly Dash dashboard to visualize optimization results',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Launch dashboard with Stage 2 results
+  python run_moga.py dashboard --config config.yaml
+
+  # Launch on custom port
+  python run_moga.py dashboard --config config.yaml --port 8080
+
+  # Use results from a different directory
+  python run_moga.py dashboard --config config.yaml --results-dir ./my_results
+        """
+    )
+
+    add_config_arg(parser_dash)
+    parser_dash.add_argument('--results-dir', '-r', default='./results',
+                           help='Results directory (default: ./results)')
+    parser_dash.add_argument('--stage', type=int, choices=[1, 2], default=2,
+                           help='Which stage results to display (default: 2)')
+    parser_dash.add_argument('--port', type=int, default=8050,
+                           help='Dashboard server port (default: 8050)')
+    parser_dash.add_argument('--host', default='0.0.0.0',
+                           help='Dashboard server host (default: 0.0.0.0)')
+    parser_dash.add_argument('--debug', action='store_true',
+                           help='Enable Dash debug mode')
+
+    parser_dash.set_defaults(func=_handle_dashboard)
+
+    # =================================================================
     # 'info' subcommand - Show configuration info
     # =================================================================
     parser_info = subparsers.add_parser('info',
@@ -915,6 +949,37 @@ def _handle_export(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
             print(f"Warning: Could not export HTML dashboard: {e}")
 
     print(f"\nExport complete for Stage {args.stage} results")
+
+
+def _handle_dashboard(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Handle the 'dashboard' subcommand."""
+    results_dir = Path(args.results_dir)
+    stage_dir = results_dir / f'stage{args.stage}'
+
+    results_file = stage_dir / 'results.json'
+    if not results_file.exists():
+        print(f"Error: Results not found at {results_file}")
+        print(f"Run 'python run_moga.py run --config config.yaml --stage {args.stage}' first")
+        sys.exit(1)
+
+    with open(results_file, 'r', encoding='utf-8') as f:
+        results = json.load(f)
+
+    from src.dashboard import create_dashboard
+    config = load_config(args.config)
+
+    print("=" * 60)
+    print("SRAM DSO-MOGA Interactive Dashboard")
+    print("=" * 60)
+    print(f"Results: {results_file}")
+    print(f"Stage: {args.stage}")
+    print(f"Server: http://{args.host}:{args.port}")
+    print("=" * 60)
+    print("Press Ctrl+C to stop the server")
+    print()
+
+    dash = create_dashboard(results, config.to_dict(), stage_dir)
+    dash.run(port=args.port, host=args.host, debug=args.debug)
 
 
 def _handle_info(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
