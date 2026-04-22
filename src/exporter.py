@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 import pandas as pd
+import numpy as np
 
 
 def export_json(results: Dict[str, Any], output_path: Path) -> None:
